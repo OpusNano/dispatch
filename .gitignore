@@ -1,4 +1,4 @@
 /config/
 *.jsonl
-dispatch
+/dispatch
 *.log
