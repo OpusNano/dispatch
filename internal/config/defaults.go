@@ -1,6 +1,7 @@
 package config
 
-const defaultConfigYAML = `# Dispatch — OpenRouter complexity router for OpenCode.
+const defaultConfigYAML = `# For most setups, only edit the 'levels' section below.
+# Dispatch — OpenRouter complexity router for OpenCode.
 # See DISPATCH.md for full documentation and safe editing guidance.
 
 openrouter:
@@ -310,6 +311,14 @@ const defaultROUTERmd = `# Dispatch — Router Documentation
 Dispatch is a bespoke OpenRouter-only complexity router for OpenCode.
 It classifies each chat completion request into one of four levels (easy, medium, hard, critical)
 and routes it to the configured OpenRouter model for that level.
+
+## Quickstart
+
+1. Start Dispatch — it auto-generates a default config at /config/router.yaml on first run.
+2. Edit the 'levels' block to set your model per tier. Everything else has sensible defaults.
+3. Restart. Done — Dispatch routes by evidence of difficulty, not scary keywords.
+
+Config auto-generates if router.yaml doesn't exist. If you hand-write from scratch, you'll miss the default patterns and exemplars and may introduce YAML bugs. Let Dispatch generate the first config, then customize.
 
 ## How Routing Works
 

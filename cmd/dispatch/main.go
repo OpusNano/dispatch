@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"dispatch/internal/config"
@@ -53,12 +54,13 @@ func main() {
 
 	if *checkConfig {
 		fmt.Printf("Config OK: %s\n", cfgPath)
-		fmt.Printf("  levels:\n")
+		fmt.Printf("\n  Routing table:\n")
 		for _, name := range []string{"easy", "medium", "hard", "critical"} {
 			lcfg := cfg.Levels[name]
-			fmt.Printf("    %-10s -> %s\n", name, lcfg.Model)
+			prov := providerSummary(lcfg.Provider)
+			fmt.Printf("    %-10s -> %s%s\n", name, lcfg.Model, prov)
 		}
-		fmt.Printf("  patterns: %d rules\n", len(cfg.Patterns))
+		fmt.Printf("\n  patterns: %d rules\n", len(cfg.Patterns))
 		fmt.Printf("  thresholds: easy=%d easy_max=%d medium_max=%d hard_max=%d\n",
 			int(cfg.Thresholds.Easy), int(cfg.Thresholds.EasyMax),
 			int(cfg.Thresholds.MediumMax), int(cfg.Thresholds.HardMax))
@@ -100,10 +102,14 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	slog.Info("dispatch starting",
-		"version", version.Version,
+	slog.Info("dispatch ready",
+		"easy", cfg.Levels["easy"].Model,
+		"medium", cfg.Levels["medium"].Model,
+		"hard", cfg.Levels["hard"].Model,
+		"critical", cfg.Levels["critical"].Model,
 		"listen", cfg.Server.Listen,
 		"openrouter_base", cfg.OpenRouter.BaseURL,
+		"version", version.Version,
 	)
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -129,4 +135,24 @@ func setupLogging(cfg *config.Config) {
 		Level: level,
 	})
 	slog.SetDefault(slog.New(handler))
+}
+
+func providerSummary(p config.ProviderConfig) string {
+	parts := []string{}
+	if len(p.Order) > 0 {
+		parts = append(parts, "order="+strings.Join(p.Order, ","))
+	}
+	if p.DataCollection != "" {
+		parts = append(parts, "data="+p.DataCollection)
+	}
+	if p.AllowFallbacks != nil && !*p.AllowFallbacks {
+		parts = append(parts, "no_fallback")
+	}
+	if len(p.Ignore) > 0 {
+		parts = append(parts, "ignore="+strings.Join(p.Ignore, ","))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, " ") + ")"
 }
