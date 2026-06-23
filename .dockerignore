@@ -1,12 +1,12 @@
-*
-!go.mod
-!go.sum
-!go.*
-!*.md
-!Dockerfile
-!docker-compose.yml
-!scripts/
-!cmd/
-!internal/
-!fixtures/
-!.*
+# Build artifacts
+dispatch
+
+# Generated at runtime
+/config/
+
+# VCS
+.git/
+
+# Logs and feedback files
+*.log
+*.jsonl
