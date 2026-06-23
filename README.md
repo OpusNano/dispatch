@@ -7,9 +7,8 @@ Classifies chat completion requests into four levels (easy, medium, hard, critic
 ## Quick Start
 
 ```bash
-# Create config dir with correct ownership (container runs as UID 65532)
+# Create config directory
 mkdir -p ./config
-chown 65532:65532 ./config
 
 # Edit .env with your OpenRouter API key
 # or set OPENROUTER_API_KEY environment variable
@@ -31,10 +30,10 @@ The router automatically generates `/config/router.yaml`, `/config/DISPATCH.md`,
 
 **Warnings:**
 - The router listens on **plain HTTP** (`:18087`). For production, place it behind a TLS-terminating reverse proxy.
-- The `/config` directory **must be writable** by UID 65532 on first run. After generation, files need only read access.
 - Never put your API key in the config file. Always use the `OPENROUTER_API_KEY` environment variable via `.env`.
 - Prompt text is **not logged** by default (`log_prompts: false`). Only enable it if you understand the privacy impact.
 - Trace mode (`trace_requests: false`) is metadata-only — it never logs prompt content.
+- **Optional security hardening**: To run as a non-root user, add `user: "65532:65532"` to `docker-compose.yml` and run `chown 65532:65532 ./config`.
 
 ## OpenCode Setup
 
@@ -271,7 +270,7 @@ Change `server.listen` in router.yaml, update the Docker port mapping (`-p`), an
 ```
 dispatch: cannot write /config/router.yaml: permission denied
 ```
-The container runs as UID 65532. Fix with:
+The `./config` directory needs write access. If you're using non-root mode (`user: "65532:65532"`), fix with:
 ```bash
 chown 65532:65532 ./config
 ```

@@ -30,7 +30,5 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 EXPOSE 18087
 
-USER 65532:65532
-
 ENTRYPOINT ["/dispatch"]
 CMD ["--config", "/config/router.yaml"]
