@@ -314,9 +314,10 @@ and routes it to the configured OpenRouter model for that level.
 
 ## Quickstart
 
-1. Start Dispatch — it auto-generates a default config at /config/router.yaml on first run.
-2. Edit the 'levels' block to set your model per tier. Everything else has sensible defaults.
-3. Restart. Done — Dispatch routes by evidence of difficulty, not scary keywords.
+1. Put your OpenRouter API key in the .env file: OPENROUTER_API_KEY=sk-or-...
+2. Start Dispatch — it auto-generates a default config at /config/router.yaml on first run.
+3. Edit the "levels" block to set your model per tier. Everything else has sensible defaults.
+4. Restart. Done — Dispatch routes by evidence of difficulty, not scary keywords.
 
 Config auto-generates if router.yaml doesn't exist. If you hand-write from scratch, you'll miss the default patterns and exemplars and may introduce YAML bugs. Let Dispatch generate the first config, then customize.
 
