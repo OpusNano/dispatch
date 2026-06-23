@@ -11,9 +11,8 @@ Classifies chat completion requests into four levels (easy, medium, hard, critic
 mkdir -p ./config
 chown 65532:65532 ./config
 
-# Copy .env.example and add your API key
-cp .env.example .env
-# Edit .env: OPENROUTER_API_KEY=sk-or-...
+# Edit .env with your OpenRouter API key
+# or set OPENROUTER_API_KEY environment variable
 
 # Build and run
 docker compose up -d --build

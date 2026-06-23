@@ -33,8 +33,7 @@ docker run -d --name dispatch \
 
 ### Docker Compose
 ```bash
-cp .env.example .env
-# Edit .env with your API key
+# Edit .env with your OpenRouter API key
 docker compose up -d --build
 ```
 
