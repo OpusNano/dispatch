@@ -1,0 +1,14 @@
+*
+!**/*.go
+!go.mod
+!go.sum
+!.dockerignore
+!Dockerfile
+!docker-compose.yml
+!README.md
+!cmd/
+!cmd/dispatch/
+!internal/
+!internal/*/
+!fixtures/
+!fixtures/**

@@ -1,0 +1,6 @@
+.env
+config/
+*.jsonl
+dispatch
+*.log
+/tmp/

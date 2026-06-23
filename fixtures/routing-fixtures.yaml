@@ -1,0 +1,121 @@
+# routing-fixtures.yaml
+# Golden test cases for classifier.
+# Each entry: name, messages, has_tools, has_response_format, expected_level (or expected_levels for fuzzy).
+
+- name: "trivial greeting"
+  messages:
+    - role: "user"
+      content: "hi there"
+  expected_level: easy
+  min_score: risk < 10
+
+- name: "simple explanation"
+  messages:
+    - role: "user"
+      content: "what is a closure, explain briefly"
+  expected_levels: [easy, medium]
+
+- name: "normal code generation"
+  messages:
+    - role: "user"
+      content: "write a Go function that reads a yaml file and returns a map"
+  expected_level: medium
+
+- name: "code block present"
+  messages:
+    - role: "user"
+      content: "here is the code:\n```\nfunc main() {}\n```"
+  expected_level: medium
+
+- name: "diff patch"
+  messages:
+    - role: "user"
+      content: "apply this patch:\n@@ -1,5 +1,6 @@\n func main() {}"
+  expected_levels: [medium, hard]
+
+- name: "stack trace"
+  messages:
+    - role: "user"
+      content: "got this error: panic: nil pointer at foo.go:42"
+  expected_level: medium
+
+- name: "failing tests with stack trace"
+  messages:
+    - role: "user"
+      content: "3 tests FAIL:\npanic: nil pointer\ngoroutine 1:\nmain.TestFoo()\n\tfoo_test.go:42"
+  expected_levels: [medium, hard]
+
+- name: "repeated failure stuck agent"
+  messages:
+    - role: "user"
+      content: "the same error persists and it's still failing. compile error: build failed"
+  expected_levels: [hard, critical]
+
+- name: "destructive data operation"
+  messages:
+    - role: "user"
+      content: "DROP TABLE production data"
+  expected_level: critical
+
+- name: "secret leak with repo context"
+  messages:
+    - role: "user"
+      content: "the API key accidentally committed to public git repo, help rotate it"
+  expected_level: critical
+
+- name: "auth bypass with access impact"
+  messages:
+    - role: "user"
+      content: "auth bypass in production lets users access other customer accounts"
+  expected_level: critical
+
+- name: "payment with customer impact"
+  messages:
+    - role: "user"
+      content: "payment refund failing, stripe credit card transactions, customers affected"
+  expected_level: critical
+
+- name: "production outage with evidence"
+  messages:
+    - role: "user"
+      content: "production outage, service is down, server log shows crash"
+  expected_level: critical
+
+- name: "database variable rename (not critical)"
+  messages:
+    - role: "user"
+      content: "rename the database variable to dbConn"
+  unwanted_level: critical
+  expected_levels: [easy, medium]
+
+- name: "tool call request"
+  messages:
+    - role: "user"
+      content: "please help me with this"
+  has_tools: true
+  expected_level: medium
+
+- name: "structured output request"
+  messages:
+    - role: "user"
+      content: "return the data as JSON"
+  has_response_format: true
+  expected_level: medium
+
+- name: "multi-file architecture refactor"
+  messages:
+    - role: "user"
+      content: "refactor the architecture across multiple files with a complete redesign"
+  expected_levels: [medium, hard]
+
+- name: "secrets leak evidence"
+  messages:
+    - role: "user"
+      content: "the API key leaked in the .env file, someone pushed it to the public repo"
+  expected_levels: [hard, critical]
+
+- name: "multi-step reasoning"
+  messages:
+    - role: "user"
+      content: "step by step plan: first design the API, then implement the handler, finally add tests"
+  expected_levels: [medium, hard]

@@ -1,0 +1,13 @@
+services:
+  dispatch:
+    container_name: dispatch
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+    ports:
+      - "18087:18087"
+    volumes:
+      - ./config:/config
