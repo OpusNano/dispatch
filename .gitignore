@@ -1,6 +1,5 @@
 .env
-config/
+/config/
 *.jsonl
 dispatch
 *.log
-/tmp/

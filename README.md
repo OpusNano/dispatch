@@ -236,6 +236,23 @@ OPENROUTER_API_KEY=sk-or-... ./dispatch --config /path/to/router.yaml
 - Streaming responses not buffered.
 - Client headers not forwarded upstream.
 - Request ID in response header and logs for correlation.
+- **Messages never modified**: The upstream request forwarded to OpenRouter preserves the original `messages`, `tools`, `response_format`, and all unknown fields. Dispatch only changes `model` and configured `provider` fields. Debug information is never injected into message content.
+
+## Content Preservation Guarantee
+
+Dispatch classifies requests using the active task frame for **routing decisions only**. The upstream request forwarded to OpenRouter is a byte-preserving modification of the original:
+
+| Field | Modified? | Details |
+|-------|:---------:|---------|
+| `model` | Yes | Replaced with the selected level's model ID |
+| `provider` | Yes | Merged with level config (order, only, ignore, data_collection, allow_fallbacks) |
+| `messages` | **Never** | All roles, content, tool_calls, tool_call_id, content arrays preserved |
+| `tools` | **Never** | All tool definitions preserved |
+| `tool_choice` | **Never** | Preserved as-is |
+| `response_format` | **Never** | Preserved as-is |
+| `stream` | **Never** | Preserved as-is |
+| `temperature`, `max_tokens`, `top_p`, etc | **Never** | All unknown fields preserved |
+| `X-Dispatch-*` headers, `request_id`, debug text | **Never injected** | Debug info stays in response headers, logs, and `/debug` endpoints |
 
 ## Smoke Test
 

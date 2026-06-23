@@ -196,6 +196,145 @@ func TestParseStreamFlag(t *testing.T) {
 	}
 }
 
+func TestMessagesPreservedByteEquivalent(t *testing.T) {
+	body := []byte(`{"model":"gpt-4","messages":[{"role":"system","content":"you are helpful"},{"role":"user","content":"hello"},{"role":"assistant","content":"hi there","tool_calls":[{"id":"1","function":{"name":"read","arguments":"{\"path\":\"x\"}"}}]},{"role":"tool","tool_call_id":"1","content":"file content here"}]}`)
+	result, err := RewriteRequest(body, "deepseek/deepseek-v4-flash", config.ProviderConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var original, rewritten map[string]interface{}
+	json.Unmarshal(body, &original)
+	json.Unmarshal(result, &rewritten)
+
+	origMsgs, _ := json.Marshal(original["messages"])
+	rewrittenMsgs, _ := json.Marshal(rewritten["messages"])
+	if string(origMsgs) != string(rewrittenMsgs) {
+		t.Error("messages content modified — must be byte-equivalent")
+	}
+}
+
+func TestToolsPreserved(t *testing.T) {
+	body := []byte(`{"model":"x","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object"}}}],"tool_choice":"auto"}`)
+	result, err := RewriteRequest(body, "y", config.ProviderConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]interface{}
+	json.Unmarshal(result, &p)
+	if p["tools"] == nil {
+		t.Error("tools field lost")
+	}
+	if p["tool_choice"] != "auto" {
+		t.Error("tool_choice lost")
+	}
+}
+
+func TestResponseFormatPreserved(t *testing.T) {
+	body := []byte(`{"model":"x","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
+	result, err := RewriteRequest(body, "y", config.ProviderConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]interface{}
+	json.Unmarshal(result, &p)
+	rf, ok := p["response_format"].(map[string]interface{})
+	if !ok || rf["type"] != "json_object" {
+		t.Error("response_format lost or modified")
+	}
+}
+
+func TestNoDebugTextInForwardedMessages(t *testing.T) {
+	tests := []string{
+		"request_id",
+		"X-Dispatch",
+		"dispatch/",
+		"/debug",
+		"route_level",
+	}
+	body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"write a function to sort an array"}]}`)
+	result, err := RewriteRequest(body, "test-model", config.ProviderConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr := string(result)
+	for _, banned := range tests {
+		if containsCaseInsensitive(resultStr, banned) {
+			t.Errorf("forwarded body contains banned text: %q", banned)
+		}
+	}
+}
+
+func TestOnlyModelAndProviderChanged(t *testing.T) {
+	body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"test"}],"temperature":0.7,"max_tokens":100,"top_p":0.9}`)
+	result, err := RewriteRequest(body, "target-model", config.ProviderConfig{DataCollection: "deny"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]interface{}
+	json.Unmarshal(result, &p)
+	if p["temperature"] != 0.7 {
+		t.Error("temperature modified")
+	}
+	if p["max_tokens"] != float64(100) {
+		t.Error("max_tokens modified")
+	}
+	if p["top_p"] != 0.9 {
+		t.Error("top_p modified")
+	}
+	if p["model"] != "target-model" {
+		t.Error("model not changed")
+	}
+}
+
+func TestContentArrayMessagesPreserved(t *testing.T) {
+	body := []byte(`{"model":"x","messages":[{"role":"user","content":[{"type":"text","text":"write a function"},{"type":"image_url","image_url":{"url":"http://example.com/image.png"}}]}]}`)
+	result, err := RewriteRequest(body, "y", config.ProviderConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original, rewritten map[string]interface{}
+	json.Unmarshal(body, &original)
+	json.Unmarshal(result, &rewritten)
+	origMsgs, _ := json.Marshal(original["messages"])
+	rewrittenMsgs, _ := json.Marshal(rewritten["messages"])
+	if string(origMsgs) != string(rewrittenMsgs) {
+		t.Error("content array messages modified")
+	}
+}
+
+func containsCaseInsensitive(s, substr string) bool {
+	return len(s) > 0 && len(substr) > 0 && containsFold(s, substr)
+}
+
+func containsFold(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if equalFold(s[i:i+len(substr)], substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 32
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 32
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
 func TestTruncateReasons(t *testing.T) {
 	short := []string{"reason a", "reason b"}
 	if got := truncateReasons(short); got != "reason a, reason b" {

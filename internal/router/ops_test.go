@@ -310,3 +310,75 @@ func setupTestWithCfg(cfg *config.Config, t *testing.T) (*Router, *httptest.Serv
 	router := New(cfg, client)
 	return router, upstream
 }
+
+func TestForwardedMessagesPreserveOriginalContent(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.Debug.SetResponseHeaders = false
+
+	var capturedBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		capturedBody = body
+		var parsed map[string]interface{}
+		json.Unmarshal(body, &parsed)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	os.Setenv("TEST_OR_OPS_PRESERVE", "test-key")
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"system","content":"you are helpful"},{"role":"user","content":"write a function"},{"role":"assistant","content":"ok","tool_calls":[{"id":"1","function":{"name":"read","arguments":"{\"file\":\"x\"}"}}]},{"role":"tool","tool_call_id":"1","content":"file content"}],"tools":[{"type":"function"}],"response_format":{"type":"json_object"},"temperature":0.3}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var sent map[string]interface{}
+	json.Unmarshal(capturedBody, &sent)
+
+	if sent["temperature"] != 0.3 {
+		t.Error("temperature lost")
+	}
+	if sent["tools"] == nil {
+		t.Error("tools lost")
+	}
+	if sent["response_format"] == nil {
+		t.Error("response_format lost")
+	}
+	msgs, ok := sent["messages"].([]interface{})
+	if !ok || len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %v", len(msgs))
+	}
+
+	systemMsg := msgs[0].(map[string]interface{})
+	if systemMsg["role"] != "system" {
+		t.Error("system message role wrong")
+	}
+	if !strings.Contains(systemMsg["content"].(string), "you are helpful") {
+		t.Error("system message content modified")
+	}
+
+	toolMsg := msgs[3].(map[string]interface{})
+	if toolMsg["role"] != "tool" {
+		t.Error("tool message role wrong")
+	}
+	if toolMsg["tool_call_id"] != "1" {
+		t.Error("tool_call_id lost")
+	}
+
+	bodyBytes := string(capturedBody)
+	for _, banned := range []string{"X-Dispatch", "request_id", "dispatch/", "/debug"} {
+		if strings.Contains(strings.ToLower(bodyBytes), strings.ToLower(banned)) {
+			t.Errorf("upstream body contains banned text: %q", banned)
+		}
+	}
+}
