@@ -14,7 +14,7 @@ openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key_env: "OPENROUTER_API_KEY"
   validate_models_on_start: false
-  http_referer: ""
+  http_referer: "https://github.com/OpusNano/dispatch"
   site_title: "Dispatch"
 
 # ─────────────────────────────────────────────────────────────
@@ -437,7 +437,7 @@ The selected model is visible in the X-Dispatch-Model response header and in str
 | base_url | string | https://openrouter.ai/api/v1 | OpenRouter API base URL |
 | api_key_env | string | OPENROUTER_API_KEY | Env var name for the API key |
 | validate_models_on_start | bool | false | Validate model IDs against OpenRouter at startup |
-| http_referer | string | "" | Optional HTTP-Referer header sent upstream |
+| http_referer | string | https://github.com/OpusNano/dispatch | HTTP-Referer header sent upstream (controls OpenRouter app attribution) |
 | site_title | string | Dispatch | Optional X-OpenRouter-Title header |
 
 ### server
