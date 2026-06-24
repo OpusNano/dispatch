@@ -1,5 +1,15 @@
 # Dispatch
 
+Dispatch is a model router for OpenCode.
+
+It looks at the task and chooses the right model tier.
+
+That's it.
+
+Less switching.
+Less guessing.
+Less wasting good models on dumb tasks.
+
 Bespoke OpenRouter-only complexity router for OpenCode.
 
 Classifies chat completion requests into four levels (easy, medium, hard, critical) and routes to configured OpenRouter models. Uses evidence-based complexity routing with active task frame extraction to prevent context contamination.
@@ -153,6 +163,8 @@ Edit `/config/router.yaml`. See `/config/DISPATCH.md` for full documentation.
 openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key_env: "OPENROUTER_API_KEY"
+  http_referer: "https://github.com/OpusNano/dispatch"
+  site_title: "Dispatch"
 
 server:
   listen: ":18087"
@@ -295,3 +307,16 @@ This is expected. The router selects the actual model internally per request. Ch
 
 ### Config reload failed
 If you save a bad config, the router keeps the old config active and logs the error. Check stderr logs for "config reload: validation failed".
+
+### OpenRouter shows App = "Unknown"
+OpenRouter requires the `HTTP-Referer` header for app attribution. Without it, requests show as "Unknown" in the Activity dashboard, even if `X-OpenRouter-Title` is set.
+
+Edit your existing `/config/router.yaml`:
+
+```yaml
+openrouter:
+  http_referer: "https://github.com/OpusNano/dispatch"
+  site_title: "Dispatch"
+```
+
+Then wait for auto-reload (3s) or restart the container. New requests will carry attribution headers. Existing usage rows may remain "Unknown" — only new requests are affected. OpenRouter may also take some time to update the dashboard display.
