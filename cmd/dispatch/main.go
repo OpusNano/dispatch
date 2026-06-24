@@ -84,7 +84,7 @@ func main() {
 
 	if cfg.ConfigReload.Enabled {
 		reloader := config.NewReloader(cfgPath, cfg.ConfigReload.PollIntervalSeconds)
-		go reloader.Start(rtr.ConfigPtr(), func(newCfg *config.Config) {
+		go reloader.Start(func(newCfg *config.Config) {
 			rtr.SwapConfig(newCfg)
 		}, stopCh)
 		slog.Info("config auto-reload enabled", "path", cfgPath, "poll_seconds", cfg.ConfigReload.PollIntervalSeconds)

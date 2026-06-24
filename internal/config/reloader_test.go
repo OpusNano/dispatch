@@ -15,8 +15,7 @@ func TestReloaderDetectsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := Load(cfgPath)
-	if err != nil {
+	if _, err := Load(cfgPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -24,7 +23,7 @@ func TestReloaderDetectsChange(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	_, changed := reloader.CheckAndReload(loaded)
+	_, changed := reloader.CheckAndReload()
 	if changed {
 		t.Fatal("should not detect change without modification")
 	}
@@ -39,7 +38,7 @@ func TestReloaderDetectsChange(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	newCfg, changed := reloader.CheckAndReload(loaded)
+	newCfg, changed := reloader.CheckAndReload()
 	if !changed || newCfg == nil {
 		t.Fatal("should detect content change")
 	}
@@ -57,8 +56,7 @@ func TestReloaderKeepsOldOnBadConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := Load(cfgPath)
-	if err != nil {
+	if _, err := Load(cfgPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +73,7 @@ func TestReloaderKeepsOldOnBadConfig(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	newCfg, changed := reloader.CheckAndReload(loaded)
+	newCfg, changed := reloader.CheckAndReload()
 	if changed || newCfg != nil {
 		t.Fatal("should keep old config on bad yaml")
 	}

@@ -33,7 +33,7 @@ func NewReloader(cfgPath string, pollIntervalSec int) *Reloader {
 	return r
 }
 
-func (r *Reloader) CheckAndReload(current *Config) (*Config, bool) {
+func (r *Reloader) CheckAndReload() (*Config, bool) {
 	info, err := os.Stat(r.cfgPath)
 	if err != nil {
 		slog.Error("config reload: stat failed", "error", err, "path", r.cfgPath)
@@ -74,7 +74,7 @@ func (r *Reloader) CheckAndReload(current *Config) (*Config, bool) {
 	return newCfg, true
 }
 
-func (r *Reloader) Start(current **Config, onReload func(*Config), stopCh <-chan struct{}) {
+func (r *Reloader) Start(onReload func(*Config), stopCh <-chan struct{}) {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 
@@ -83,7 +83,7 @@ func (r *Reloader) Start(current **Config, onReload func(*Config), stopCh <-chan
 		case <-stopCh:
 			return
 		case <-ticker.C:
-			newCfg, changed := r.CheckAndReload(*current)
+			newCfg, changed := r.CheckAndReload()
 			if changed && newCfg != nil {
 				onReload(newCfg)
 			}

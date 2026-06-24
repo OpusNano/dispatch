@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"dispatch/internal/classifier"
@@ -22,36 +22,28 @@ import (
 )
 
 type Router struct {
-	Config       *config.Config
+	cfg          atomic.Pointer[config.Config]
 	Client       *openrouter.Client
 	Stats        *Stats
 	RequestIndex *requestIndex
-	cfgMu        sync.RWMutex
 }
 
 func New(cfg *config.Config, client *openrouter.Client) *Router {
-	return &Router{
-		Config:       cfg,
+	rt := &Router{
 		Client:       client,
 		Stats:        NewStats(),
 		RequestIndex: newRequestIndex(cfg.Debug.RequestIndexSize),
 	}
+	rt.cfg.Store(cfg)
+	return rt
 }
 
 func (rt *Router) GetConfig() *config.Config {
-	rt.cfgMu.RLock()
-	defer rt.cfgMu.RUnlock()
-	return rt.Config
-}
-
-func (rt *Router) ConfigPtr() **config.Config {
-	return &rt.Config
+	return rt.cfg.Load()
 }
 
 func (rt *Router) SwapConfig(newCfg *config.Config) {
-	rt.cfgMu.Lock()
-	rt.Config = newCfg
-	rt.cfgMu.Unlock()
+	rt.cfg.Store(newCfg)
 	rt.Stats.RecordReload(time.Now().Unix())
 }
 

@@ -314,7 +314,7 @@ and routes it to the configured OpenRouter model for that level.
 
 ## Quickstart
 
-1. Put your OpenRouter API key in the .env file: OPENROUTER_API_KEY=sk-or-...
+1. Copy .env.example to .env and put your OpenRouter API key: OPENROUTER_API_KEY=sk-or-...
 2. Start Dispatch — it auto-generates a default config at /config/router.yaml on first run.
 3. Edit the "levels" block to set your model per tier. Everything else has sensible defaults.
 4. Restart. Done — Dispatch routes by evidence of difficulty, not scary keywords.

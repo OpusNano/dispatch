@@ -7,23 +7,12 @@ Classifies chat completion requests into four levels (easy, medium, hard, critic
 ## Quick Start
 
 ```bash
-# Create config directory
-mkdir -p ./config
+# Copy and edit the env file with your OpenRouter API key
+cp .env.example .env
+$EDITOR .env
 
-# Edit .env with your OpenRouter API key
-# or set OPENROUTER_API_KEY environment variable
-
-# Build and run
+# Build and run (config auto-generates on first start)
 docker compose up -d --build
-
-# Or build manually
-docker build -t dispatch .
-docker run -d \
-  --name dispatch \
-  -p 18087:18087 \
-  --env-file .env \
-  -v ./config:/config \
-  dispatch
 ```
 
 The router automatically generates `/config/router.yaml`, `/config/DISPATCH.md`, and `/config/exemplars.yaml` on first run. Config changes are auto-reloaded without restart.
