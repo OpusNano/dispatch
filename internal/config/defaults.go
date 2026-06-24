@@ -1,8 +1,14 @@
 package config
 
-const defaultConfigYAML = `# For most setups, only edit the 'levels' section below.
-# Dispatch — OpenRouter complexity router for OpenCode.
+const defaultConfigYAML = `# Dispatch — OpenRouter complexity router for OpenCode.
 # See DISPATCH.md for full documentation and safe editing guidance.
+#
+# API keys are loaded from environment variables, not from this file.
+# Set OPENROUTER_API_KEY in your .env file (copy .env.example → .env).
+
+# ─────────────────────────────────────────────────────────────
+#  OpenRouter  — upstream connection
+# ─────────────────────────────────────────────────────────────
 
 openrouter:
   base_url: "https://openrouter.ai/api/v1"
@@ -11,37 +17,72 @@ openrouter:
   http_referer: ""
   site_title: "Dispatch"
 
+# ─────────────────────────────────────────────────────────────
+#  Server  — HTTP listen settings
+# ─────────────────────────────────────────────────────────────
+
 server:
   listen: ":18087"
   max_body_size: 26214400
   read_timeout_seconds: 30
   write_timeout_seconds: 0
 
+# ─────────────────────────────────────────────────────────────
+#  Model Profiles
+# ─────────────────────────────────────────────────────────────
+#
+#  Define reusable model profiles here.  The YAML key is the
+#  profile name (your choice).  'id' is the OpenRouter model ID.
+#  Levels below reference profiles with 'use:'.
+#
+#  Empty provider.order: [] means "let OpenRouter choose."
+
+model_profiles:
+  deepseek_flash:
+    id: "deepseek/deepseek-v4-flash"
+    provider:
+      order: []
+      allow_fallbacks: true
+      data_collection: "deny"
+
+  deepseek_pro:
+    id: "deepseek/deepseek-v4-pro"
+    provider:
+      order: []
+      allow_fallbacks: true
+      data_collection: "deny"
+
+  glm_52:
+    id: "z-ai/glm-5.2"
+    provider:
+      order: []
+      allow_fallbacks: true
+      data_collection: "deny"
+
+# ─────────────────────────────────────────────────────────────
+#  Routing Levels
+# ─────────────────────────────────────────────────────────────
+#
+#  Dispatch classifies each request and resolves the level to
+#  a model profile.  Use 'use:' to reference a profile above,
+#  or 'model:' for a direct inline override.
+
 levels:
   easy:
-    model: "deepseek/deepseek-v4-flash"
-    provider:
-      order: []
-      allow_fallbacks: true
-      data_collection: "deny"
+    use: deepseek_flash
+
   medium:
-    model: "deepseek/deepseek-v4-flash"
-    provider:
-      order: []
-      allow_fallbacks: true
-      data_collection: "deny"
+    use: deepseek_flash
+
   hard:
-    model: "deepseek/deepseek-v4-pro"
-    provider:
-      order: []
-      allow_fallbacks: true
-      data_collection: "deny"
+    use: deepseek_pro
+
   critical:
-    model: "z-ai/glm-5.2"
-    provider:
-      order: []
-      allow_fallbacks: true
-      data_collection: "deny"
+    use: glm_52
+
+# ─────────────────────────────────────────────────────────────
+#  Thresholds  — score → level mapping
+# ─────────────────────────────────────────────────────────────
 
 thresholds:
   easy: 0
@@ -51,6 +92,10 @@ thresholds:
   risk_critical_override: 50
   risk_hard_floor: 35
   agent_pressure_critical_override: 50
+
+# ─────────────────────────────────────────────────────────────
+#  Scoring  — dimension caps and weights
+# ─────────────────────────────────────────────────────────────
 
 scoring:
   complexity_cap: 40
@@ -62,6 +107,10 @@ scoring:
     risk: 1.0
     agent_pressure: 0.8
     downgrade: -1.0
+
+# ─────────────────────────────────────────────────────────────
+#  Patterns  — evidence-detection rules
+# ─────────────────────────────────────────────────────────────
 
 patterns:
   - id: coding_intent
@@ -219,6 +268,10 @@ patterns:
     weight: 8
     reason: "trivial rename, no migration/production context"
 
+# ─────────────────────────────────────────────────────────────
+#  Intelligence  — optional enhancement layers
+# ─────────────────────────────────────────────────────────────
+
 intelligence:
   enabled: false
   length:
@@ -287,6 +340,10 @@ intelligence:
         floor_reduction: 0
         force_min_level: medium
 
+# ─────────────────────────────────────────────────────────────
+#  Debug / Observability
+# ─────────────────────────────────────────────────────────────
+
 debug:
   log_level: "info"
   log_prompts: false
@@ -298,6 +355,10 @@ debug:
   request_index_size: 500
   feedback_enabled: false
   feedback_path: "/config/feedback.jsonl"
+
+# ─────────────────────────────────────────────────────────────
+#  Config Reload
+# ─────────────────────────────────────────────────────────────
 
 config_reload:
   enabled: true
@@ -316,7 +377,7 @@ and routes it to the configured OpenRouter model for that level.
 
 1. Copy .env.example to .env and put your OpenRouter API key: OPENROUTER_API_KEY=sk-or-...
 2. Start Dispatch — it auto-generates a default config at /config/router.yaml on first run.
-3. Edit the "levels" block to set your model per tier. Everything else has sensible defaults.
+3. Define model profiles under "model_profiles", then assign them to levels with "use:".
 4. Restart. Done — Dispatch routes by evidence of difficulty, not scary keywords.
 
 Config auto-generates if router.yaml doesn't exist. If you hand-write from scratch, you'll miss the default patterns and exemplars and may introduce YAML bugs. Let Dispatch generate the first config, then customize.
@@ -387,13 +448,55 @@ The selected model is visible in the X-Dispatch-Model response header and in str
 | read_timeout_seconds | int | 30 | Read timeout |
 | write_timeout_seconds | int | 0 | Write timeout (0 = no timeout, for streaming) |
 
-### levels
-Map of level name to model+provider config. Four levels required: easy, medium, hard, critical.
-Multiple levels may point to the same model.
+### model_profiles
+Named reusable model profiles. Define your OpenRouter models here — no limit on how many you define.
+The YAML key is the profile name (your choice). Only profiles referenced by 'use:' in levels are active.
 
-Each level has:
-- **model** — OpenRouter model ID (e.g., "deepseek/deepseek-v4-flash").
-- **provider** — optional provider routing config.
+Each profile has:
+- **id** — OpenRouter model ID (e.g., "openai/gpt-4o").
+- **provider** — optional provider routing config (order, data_collection, etc.).
+
+Example:
+
+    model_profiles:
+      deepseek_flash:
+        id: "deepseek/deepseek-v4-flash"
+        provider:
+          data_collection: "deny"
+      deepseek_pro:
+        id: "deepseek/deepseek-v4-pro"
+
+### levels
+Map of complexity tier to a model profile or inline model. Four levels required: easy, medium, hard, critical.
+Multiple levels may reference the same profile with 'use:'.
+
+Each level must set exactly one of:
+- **use** — reference a profile name from 'model_profiles'.
+- **model** — inline OpenRouter model ID (for quick/simple configs).
+
+Invalid: setting both 'use' and 'model', or setting neither.
+If using 'use:', provider settings come from the referenced profile.
+If using inline 'model:', provider settings come from that level's 'provider:' field.
+
+Example (profile reference):
+
+    levels:
+      easy:
+        use: deepseek_flash
+      medium:
+        use: deepseek_flash
+      hard:
+        use: deepseek_pro
+      critical:
+        use: glm_52
+
+Example (inline model):
+
+    levels:
+      easy:
+        model: "openai/gpt-4o"
+        provider:
+          data_collection: "deny"
 
 ### thresholds
 | Field | Type | Default | Description |
@@ -568,17 +671,35 @@ multi-signal evidence-based gates. See the patterns section above for details.
 If you are an LLM editing this configuration:
 
 1. **Read before editing**: Load router.yaml and this DISPATCH.md.
-2. **Validate after editing**: Run "dispatch --check-config /path/to/router.yaml".
+2. **Validate after editing**: Run "dispatch --check-config --config /path/to/router.yaml".
 3. **Never edit**: Set api_key_env to a literal key. Keep it as an env var name.
-4. **Safe edits**:
-   - Changing a level's "model" to a different OpenRouter model ID.
-   - Adding a new pattern rule with a unique "id", valid "dimension", and a "reason".
-   - Tweaking "weights" or "thresholds" by small increments (±10%).
-5. **Risky edits** — explain impact and test carefully:
-   - Changing caps, override thresholds, or requires/requires_not graphs.
-   - Removing downgrade rules (they protect cost).
-   - Setting log_prompts to true.
-6. **Adding a pattern rule**:
+
+### Editing Model Profiles and Levels
+
+- **Prefer editing 'model_profiles.<name>.id'** when changing a model — this updates all levels that reference that profile.
+- **Prefer adding a new profile** under 'model_profiles' when adding a reusable model.
+- **The YAML key IS the profile name** (e.g., 'deepseek_flash'). Do not invent a 'name:' field inside a profile.
+- **Do not use 'models.some_name.model'** — the schema is 'model_profiles.<name>.id'.
+- **Do not set both 'use' and 'model' on the same level** — they are mutually exclusive.
+- **Do not put OpenRouter API keys in this file** — use the 'OPENROUTER_API_KEY' environment variable.
+- **Preserve provider settings** unless asked to change them.
+- **If provider names are unknown, leave 'order: []'** (empty order means "let OpenRouter choose providers").
+
+### Safe Edits
+
+- Changing 'model_profiles.<name>.id' to a different OpenRouter model ID.
+- Adding a new profile under 'model_profiles' and referencing it with 'use:'.
+- Adding a new pattern rule with a unique "id", valid "dimension", and a "reason".
+- Tweaking "weights" or "thresholds" by small increments (±10%).
+
+### Risky Edits
+
+Explain impact and test carefully:
+- Changing caps, override thresholds, or requires/requires_not graphs.
+- Removing downgrade rules (they protect cost).
+- Setting log_prompts to true.
+
+### Adding a Pattern Rule
 
         - id: my_rule
           regex: "..."

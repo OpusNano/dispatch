@@ -36,11 +36,15 @@ func TestLoadDefaultConfig(t *testing.T) {
 			t.Errorf("missing level: %s", level)
 		}
 	}
-	if cfg.Levels["easy"].Model != "deepseek/deepseek-v4-flash" {
-		t.Errorf("easy model = %s", cfg.Levels["easy"].Model)
+	if cfg.Levels["easy"].Use != "deepseek_flash" {
+		t.Errorf("easy level use = %s, want deepseek_flash", cfg.Levels["easy"].Use)
 	}
-	if cfg.Levels["easy"].Provider.DataCollection != "deny" {
-		t.Errorf("easy data_collection = %s", cfg.Levels["easy"].Provider.DataCollection)
+	rm, _ := cfg.ResolveLevel("easy")
+	if rm.Model != "deepseek/deepseek-v4-flash" {
+		t.Errorf("easy model = %s", rm.Model)
+	}
+	if cfg.ModelProfiles["deepseek_flash"].Provider.DataCollection != "deny" {
+		t.Errorf("easy data_collection = %s", cfg.ModelProfiles["deepseek_flash"].Provider.DataCollection)
 	}
 	if len(cfg.CompiledPatterns()) == 0 {
 		t.Error("patterns should be compiled")
@@ -56,7 +60,7 @@ func TestMissingLevel(t *testing.T) {
 }
 
 func TestMissingModel(t *testing.T) {
-	raw := strings.Replace(defaultConfigYAML, "model: \"deepseek/deepseek-v4-flash\"", "model: \"\"", 1)
+	raw := strings.Replace(defaultConfigYAML, "id: \"deepseek/deepseek-v4-flash\"", "id: \"\"", 1)
 	_, err := loadFromBytes([]byte(raw))
 	if err == nil {
 		t.Fatal("expected error for empty model")
@@ -178,7 +182,7 @@ func TestProviderMergeField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid data_collection should work: %v", err)
 	}
-	if cfg.Levels["easy"].Provider.DataCollection != "allow" {
-		t.Errorf("data_collection = %s, want allow", cfg.Levels["easy"].Provider.DataCollection)
+	if cfg.ModelProfiles["deepseek_flash"].Provider.DataCollection != "allow" {
+		t.Errorf("data_collection = %s, want allow", cfg.ModelProfiles["deepseek_flash"].Provider.DataCollection)
 	}
 }

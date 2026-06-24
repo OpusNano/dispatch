@@ -111,7 +111,7 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		level = cls.Level
 	}
 
-	levelCfg, ok := cfg.Levels[level]
+	rm, ok := cfg.ResolveLevel(level)
 	if !ok {
 		http.Error(w, "unknown level", http.StatusInternalServerError)
 		return
@@ -120,12 +120,12 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if forcedBy != "" {
 		cls = classifier.Classification{
 			Level:    level,
-			Model:    levelCfg.Model,
+			Model:    rm.Model,
 			ForcedBy: forcedBy,
 		}
 	}
 
-	rewrittenBody, err := openrouter.RewriteRequest(rawBody, levelCfg.Model, levelCfg.Provider)
+	rewrittenBody, err := openrouter.RewriteRequest(rawBody, rm.Model, rm.Provider)
 	if err != nil {
 		slog.Error("rewrite failed", "error", err, "request_id", requestID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -182,7 +182,7 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		topicIgnored = true
 	}
 
-	rt.Stats.Record(level, levelCfg.Model, statusCode, isStream, routeDurationNs,
+	rt.Stats.Record(level, rm.Model, statusCode, isStream, routeDurationNs,
 		sessionEscalated, gateFired, frame.ContinuationDetected, lengthCapped, topicIgnored)
 
 	if cfg.Debug.RequestIndexEnabled && cls.Frame != nil {
@@ -192,7 +192,7 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			RequestID:         requestID,
 			Timestamp:         time.Now(),
 			Level:             level,
-			Model:             levelCfg.Model,
+			Model:             rm.Model,
 			Status:            statusCode,
 			LatestUserIndex:   frame.LatestUserIndex,
 			TaskBoundaryIndex: frame.TaskBoundaryIndex,

@@ -33,9 +33,22 @@ type ProviderConfig struct {
 	DataCollection string   `yaml:"data_collection,omitempty"`
 }
 
+type ModelProfile struct {
+	Id       string         `yaml:"id"`
+	Provider ProviderConfig `yaml:"provider,omitempty"`
+}
+
 type LevelConfig struct {
-	Model    string         `yaml:"model"`
-	Provider ProviderConfig `yaml:"provider"`
+	Use      string         `yaml:"use,omitempty"`
+	Model    string         `yaml:"model,omitempty"`
+	Provider ProviderConfig `yaml:"provider,omitempty"`
+}
+
+type ResolvedModel struct {
+	Model       string
+	Provider    ProviderConfig
+	Source      string // "profile" or "inline"
+	ProfileName string // set when Source == "profile"
 }
 
 type ThresholdsConfig struct {
@@ -208,16 +221,17 @@ type IntelligenceConfig struct {
 }
 
 type Config struct {
-	OpenRouter   OpenRouterConfig       `yaml:"openrouter"`
-	Server       ServerConfig           `yaml:"server"`
-	Levels       map[string]LevelConfig `yaml:"levels"`
-	Thresholds   ThresholdsConfig       `yaml:"thresholds"`
-	Scoring      ScoringConfig          `yaml:"scoring"`
-	Patterns     []PatternRule          `yaml:"patterns"`
-	Debug        DebugConfig            `yaml:"debug"`
-	ConfigReload ConfigReloadConfig     `yaml:"config_reload"`
-	Intelligence *IntelligenceConfig    `yaml:"intelligence,omitempty"`
-	Version      string                 `yaml:"version"`
+	OpenRouter    OpenRouterConfig        `yaml:"openrouter"`
+	Server        ServerConfig            `yaml:"server"`
+	ModelProfiles map[string]ModelProfile `yaml:"model_profiles"`
+	Levels        map[string]LevelConfig  `yaml:"levels"`
+	Thresholds    ThresholdsConfig        `yaml:"thresholds"`
+	Scoring       ScoringConfig           `yaml:"scoring"`
+	Patterns      []PatternRule           `yaml:"patterns"`
+	Debug         DebugConfig             `yaml:"debug"`
+	ConfigReload  ConfigReloadConfig      `yaml:"config_reload"`
+	Intelligence  *IntelligenceConfig     `yaml:"intelligence,omitempty"`
+	Version       string                  `yaml:"version"`
 
 	compiledPatterns map[string]*compiledRule
 }
@@ -263,6 +277,36 @@ func (c *Config) CompileAndValidate() error {
 	return nil
 }
 
+func (c *Config) ResolveLevel(level string) (ResolvedModel, bool) {
+	lc, ok := c.Levels[level]
+	if !ok {
+		return ResolvedModel{}, false
+	}
+
+	if lc.Model != "" {
+		return ResolvedModel{
+			Model:    lc.Model,
+			Provider: lc.Provider,
+			Source:   "inline",
+		}, true
+	}
+
+	if lc.Use != "" {
+		mp, ok := c.ModelProfiles[lc.Use]
+		if !ok {
+			return ResolvedModel{}, false
+		}
+		return ResolvedModel{
+			Model:       mp.Id,
+			Provider:    mp.Provider,
+			Source:      "profile",
+			ProfileName: lc.Use,
+		}, true
+	}
+
+	return ResolvedModel{}, false
+}
+
 func (c *Config) validate() error {
 	errs := make([]string, 0)
 
@@ -273,13 +317,39 @@ func (c *Config) validate() error {
 		errs = append(errs, "openrouter.api_key_env is required")
 	}
 
+	if len(c.ModelProfiles) == 0 {
+		errs = append(errs, "model_profiles: at least one profile is required")
+	}
+	for name, mp := range c.ModelProfiles {
+		if mp.Id == "" {
+			errs = append(errs, fmt.Sprintf("model_profiles.%s.id is required", name))
+		}
+	}
+
 	validLevels := map[string]bool{"easy": true, "medium": true, "hard": true, "critical": true}
 	for _, level := range []string{"easy", "medium", "hard", "critical"} {
-		lcfg, ok := c.Levels[level]
+		lc, ok := c.Levels[level]
 		if !ok {
 			errs = append(errs, fmt.Sprintf("levels.%s is required", level))
-		} else if lcfg.Model == "" {
-			errs = append(errs, fmt.Sprintf("levels.%s.model is required", level))
+			continue
+		}
+		if lc.Use == "" && lc.Model == "" {
+			errs = append(errs, fmt.Sprintf("levels.%s: must set either 'use' or 'model'", level))
+		}
+		if lc.Use != "" && lc.Model != "" {
+			errs = append(errs, fmt.Sprintf("levels.%s: cannot set both 'use' and 'model'", level))
+		}
+		if lc.Use != "" {
+			if _, ok := c.ModelProfiles[lc.Use]; !ok {
+				errs = append(errs, fmt.Sprintf("levels.%s: 'use' references unknown profile %q", level, lc.Use))
+			}
+		}
+		if lc.Model != "" && lc.Use == "" {
+			// inline model — valid as long as model is non-empty
+			if lc.Provider.Order == nil && lc.Provider.AllowFallbacks == nil && lc.Provider.DataCollection == "" &&
+				len(lc.Provider.Only) == 0 && len(lc.Provider.Ignore) == 0 {
+				// empty provider is fine (defaults apply)
+			}
 		}
 	}
 	for k := range c.Levels {

@@ -530,12 +530,12 @@ func TestAccelBufferingHeaderSet(t *testing.T) {
 
 func TestProviderMergeInFullFlow(t *testing.T) {
 	cfg, _ := config.DefaultConfig()
-	easyLevel := cfg.Levels["easy"]
-	easyLevel.Provider = config.ProviderConfig{
+	flashProfile := cfg.ModelProfiles["deepseek_flash"]
+	flashProfile.Provider = config.ProviderConfig{
 		DataCollection: "deny",
 		Order:          []string{"anthropic"},
 	}
-	cfg.Levels["easy"] = easyLevel
+	cfg.ModelProfiles["deepseek_flash"] = flashProfile
 
 	var receivedProvider map[string]interface{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

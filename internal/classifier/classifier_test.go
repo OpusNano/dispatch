@@ -266,14 +266,16 @@ func TestRiskFloorForcesHard(t *testing.T) {
 
 func TestModelReturnedInClassification(t *testing.T) {
 	cfg := loadConfig(t)
+	easyRM, _ := cfg.ResolveLevel("easy")
 	result := ClassifySimple(makeInput("hello", false, false), cfg)
-	if result.Model != cfg.Levels["easy"].Model {
-		t.Errorf("easy model should be %s, got %s", cfg.Levels["easy"].Model, result.Model)
+	if result.Model != easyRM.Model {
+		t.Errorf("easy model should be %s, got %s", easyRM.Model, result.Model)
 	}
 
+	criticalRM, _ := cfg.ResolveLevel("critical")
 	result2 := ClassifySimple(makeInput("DROP TABLE production data", false, false), cfg)
-	if result2.Model != cfg.Levels["critical"].Model {
-		t.Errorf("critical model should be %s, got %s (level=%s)", cfg.Levels["critical"].Model, result2.Model, result2.Level)
+	if result2.Model != criticalRM.Model {
+		t.Errorf("critical model should be %s, got %s (level=%s)", criticalRM.Model, result2.Model, result2.Level)
 	}
 }
 

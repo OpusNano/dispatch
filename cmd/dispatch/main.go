@@ -50,15 +50,24 @@ func main() {
 
 	setupLogging(cfg)
 
-	slog.Info("config loaded", "path", cfgPath, "levels", len(cfg.Levels), "patterns", len(cfg.Patterns))
+	slog.Info("config loaded", "path", cfgPath, "model_profiles", len(cfg.ModelProfiles), "levels", len(cfg.Levels), "patterns", len(cfg.Patterns))
 
 	if *checkConfig {
 		fmt.Printf("Config OK: %s\n", cfgPath)
+		fmt.Printf("\n  Model profiles (%d):\n", len(cfg.ModelProfiles))
+		for name, mp := range cfg.ModelProfiles {
+			prov := providerSummary(mp.Provider)
+			fmt.Printf("    %-18s -> %s%s\n", name, mp.Id, prov)
+		}
 		fmt.Printf("\n  Routing table:\n")
 		for _, name := range []string{"easy", "medium", "hard", "critical"} {
-			lcfg := cfg.Levels[name]
-			prov := providerSummary(lcfg.Provider)
-			fmt.Printf("    %-10s -> %s%s\n", name, lcfg.Model, prov)
+			rm, _ := cfg.ResolveLevel(name)
+			prov := providerSummary(rm.Provider)
+			source := cfg.Levels[name].Use
+			if source == "" {
+				source = "(inline)"
+			}
+			fmt.Printf("    %-10s -> %s  [profile: %s]%s\n", name, rm.Model, source, prov)
 		}
 		fmt.Printf("\n  patterns: %d rules\n", len(cfg.Patterns))
 		fmt.Printf("  thresholds: easy=%d easy_max=%d medium_max=%d hard_max=%d\n",
@@ -102,11 +111,15 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	easyRM, _ := cfg.ResolveLevel("easy")
+	mediumRM, _ := cfg.ResolveLevel("medium")
+	hardRM, _ := cfg.ResolveLevel("hard")
+	criticalRM, _ := cfg.ResolveLevel("critical")
 	slog.Info("dispatch ready",
-		"easy", cfg.Levels["easy"].Model,
-		"medium", cfg.Levels["medium"].Model,
-		"hard", cfg.Levels["hard"].Model,
-		"critical", cfg.Levels["critical"].Model,
+		"easy", easyRM.Model,
+		"medium", mediumRM.Model,
+		"hard", hardRM.Model,
+		"critical", criticalRM.Model,
 		"listen", cfg.Server.Listen,
 		"openrouter_base", cfg.OpenRouter.BaseURL,
 		"version", version.Version,

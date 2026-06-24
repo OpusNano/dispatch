@@ -10,11 +10,11 @@ import (
 )
 
 func TestMissingAllLevelsRejected(t *testing.T) {
-	raw := strings.Replace(defaultConfigYAML, "levels:\n", "levels:\n  placeholder: {}\n", 1)
-	raw = strings.Replace(raw, "  easy:\n", "  # easy:\n", 1)
-	raw = strings.Replace(raw, "  medium:\n", "  # medium:\n", 1)
-	raw = strings.Replace(raw, "  hard:\n", "  # hard:\n", 1)
-	raw = strings.Replace(raw, "  critical:\n", "  # critical:\n", 1)
+	raw := strings.Replace(defaultConfigYAML, "levels:\n", "levels:\n  placeholder:\n    use: deepseek_flash\n", 1)
+	raw = strings.Replace(raw, "  easy:\n    use: deepseek_flash\n", "  easy:\n    use: placeholder\n", 1)
+	raw = strings.Replace(raw, "  medium:\n    use: deepseek_flash\n", "  # medium: removed\n", 1)
+	raw = strings.Replace(raw, "  hard:\n    use: deepseek_pro\n", "  # hard: removed\n", 1)
+	raw = strings.Replace(raw, "  critical:\n    use: glm_52\n", "  # critical: removed\n", 1)
 	_, err := loadFromBytes([]byte(raw))
 	if err == nil {
 		t.Fatal("expected error for missing all levels")
@@ -89,9 +89,8 @@ unknown_top_level_field: "hello"`, 1)
 
 func TestUnknownLevelRejected(t *testing.T) {
 	raw := strings.Replace(defaultConfigYAML,
-		"  critical:\n    model:",
-		"  critical:\n    model:", 1)
-	raw = raw + "\n  extra_level:\n    model: \"test/model\"\n"
+		"  critical:\n    use: glm_52",
+		"  critical:\n    use: glm_52\n  extra_level:\n    model: \"test/model\"", 1)
 	_, err := loadFromBytes([]byte(raw))
 	if err == nil {
 		t.Fatal("expected error for unknown level")
@@ -100,26 +99,26 @@ func TestUnknownLevelRejected(t *testing.T) {
 
 func TestConfigWithPinnedModelIDs(t *testing.T) {
 	raw := strings.Replace(defaultConfigYAML,
-		`model: "deepseek/deepseek-v4-flash"`,
-		`model: "anthropic/claude-3.5-sonnet"`, 1)
+		`id: "deepseek/deepseek-v4-flash"`,
+		`id: "anthropic/claude-3.5-sonnet"`, 1)
 	raw = strings.Replace(raw,
-		`model: "deepseek/deepseek-v4-pro"`,
-		`model: "openai/gpt-4o"`, 1)
+		`id: "deepseek/deepseek-v4-pro"`,
+		`id: "openai/gpt-4o"`, 1)
 	raw = strings.Replace(raw,
-		`model: "z-ai/glm-5.2"`,
-		`model: "google/gemini-2.0-flash"`, 1)
+		`id: "z-ai/glm-5.2"`,
+		`id: "google/gemini-2.0-flash"`, 1)
 	cfg, err := loadFromBytes([]byte(raw))
 	if err != nil {
 		t.Fatalf("pinned model IDs should be accepted: %v", err)
 	}
-	if cfg.Levels["easy"].Model != "anthropic/claude-3.5-sonnet" {
-		t.Errorf("easy model = %s", cfg.Levels["easy"].Model)
+	if cfg.ModelProfiles["deepseek_flash"].Id != "anthropic/claude-3.5-sonnet" {
+		t.Errorf("flash model = %s", cfg.ModelProfiles["deepseek_flash"].Id)
 	}
-	if cfg.Levels["hard"].Model != "openai/gpt-4o" {
-		t.Errorf("hard model = %s", cfg.Levels["hard"].Model)
+	if cfg.ModelProfiles["deepseek_pro"].Id != "openai/gpt-4o" {
+		t.Errorf("pro model = %s", cfg.ModelProfiles["deepseek_pro"].Id)
 	}
-	if cfg.Levels["critical"].Model != "google/gemini-2.0-flash" {
-		t.Errorf("critical model = %s", cfg.Levels["critical"].Model)
+	if cfg.ModelProfiles["glm_52"].Id != "google/gemini-2.0-flash" {
+		t.Errorf("glm model = %s", cfg.ModelProfiles["glm_52"].Id)
 	}
 }
 
@@ -200,9 +199,12 @@ func TestEmptyProviderConfigProducesNoProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, level := range []string{"easy", "medium", "hard", "critical"} {
-		lcfg := cfg.Levels[level]
-		if len(lcfg.Provider.Order) != 0 {
-			t.Errorf("level %s: default order should be empty, got %v", level, lcfg.Provider.Order)
+		rm, ok := cfg.ResolveLevel(level)
+		if !ok {
+			t.Fatalf("resolve level %s failed", level)
+		}
+		if len(rm.Provider.Order) != 0 {
+			t.Errorf("level %s: default order should be empty, got %v", level, rm.Provider.Order)
 		}
 	}
 }

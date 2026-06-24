@@ -102,11 +102,11 @@ func Classify(input Input, cfg *config.Config, sessionID, taskKey, profileName s
 	analysis.Context = contextMeta
 	populateAnalysisEvidence(&analysis, facts)
 
-	levelCfg := cfg.Levels[level]
+	rm, _ := cfg.ResolveLevel(level)
 
 	cls := Classification{
 		Level:    level,
-		Model:    levelCfg.Model,
+		Model:    rm.Model,
 		Scores:   scores,
 		Reasons:  reasons,
 		Analysis: analysis,

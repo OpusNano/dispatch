@@ -153,10 +153,11 @@ func TestCalibrationForcedLevelModel(t *testing.T) {
 	input := Input{
 		Messages: []Message{{Role: "user", Content: "use critical model"}},
 	}
+	rm, _ := cfg.ResolveLevel("critical")
 	result := ClassifySimple(input, cfg)
 	if result.Level == "critical" {
-		if result.Model != cfg.Levels["critical"].Model {
-			t.Errorf("critical model = %s, want %s", result.Model, cfg.Levels["critical"].Model)
+		if result.Model != rm.Model {
+			t.Errorf("critical model = %s, want %s", result.Model, rm.Model)
 		}
 	}
 }

@@ -158,15 +158,29 @@ server:
   listen: ":18087"
   max_body_size: 26214400  # 25 MiB
 
+model_profiles:
+  deepseek_flash:
+    id: "deepseek/deepseek-v4-flash"
+    provider:
+      data_collection: "deny"
+  deepseek_pro:
+    id: "deepseek/deepseek-v4-pro"
+    provider:
+      data_collection: "deny"
+  glm_52:
+    id: "z-ai/glm-5.2"
+    provider:
+      data_collection: "deny"
+
 levels:
   easy:
-    model: "deepseek/deepseek-v4-flash"
+    use: deepseek_flash
   medium:
-    model: "deepseek/deepseek-v4-flash"
+    use: deepseek_flash
   hard:
-    model: "deepseek/deepseek-v4-pro"
+    use: deepseek_pro
   critical:
-    model: "z-ai/glm-5.2"
+    use: glm_52
 
 debug:
   log_decisions: true
