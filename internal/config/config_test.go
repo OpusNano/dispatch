@@ -205,3 +205,16 @@ func TestProviderMergeField(t *testing.T) {
 		t.Errorf("data_collection = %s, want allow", cfg.ModelProfiles["deepseek_flash"].Provider.DataCollection)
 	}
 }
+
+func TestDefaultConfigHasAPIKeyFile(t *testing.T) {
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenRouter.APIKeyFile != "/config/.env" {
+		t.Errorf("APIKeyFile = %q, want /config/.env", cfg.OpenRouter.APIKeyFile)
+	}
+	if cfg.OpenRouter.APIKeyEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("APIKeyEnv = %q, want OPENROUTER_API_KEY", cfg.OpenRouter.APIKeyEnv)
+	}
+}

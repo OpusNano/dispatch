@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -87,8 +89,20 @@ func main() {
 	}
 
 	apiKey := strings.TrimSpace(os.Getenv(cfg.OpenRouter.APIKeyEnv))
+	if cfg.OpenRouter.APIKeyFile != "" {
+		fileKey, found, err := loadAPIKeyFromFile(cfg.OpenRouter.APIKeyFile, cfg.OpenRouter.APIKeyEnv)
+		if err != nil {
+			slog.Warn("api key file read failed at startup, using env var fallback", "path", cfg.OpenRouter.APIKeyFile, "error", err)
+		} else if found && fileKey != "" {
+			apiKey = fileKey
+			slog.Info("api key loaded from file", "path", cfg.OpenRouter.APIKeyFile, "api_key_length", len(apiKey))
+		}
+	}
 	if apiKey == "" {
 		fmt.Fprintf(os.Stderr, "dispatch: %s environment variable not set or empty\n", cfg.OpenRouter.APIKeyEnv)
+		if cfg.OpenRouter.APIKeyFile != "" {
+			fmt.Fprintf(os.Stderr, "dispatch: also tried api_key_file %s — no valid key found\n", cfg.OpenRouter.APIKeyFile)
+		}
 		os.Exit(1)
 	}
 	keyPrefixValid := strings.HasPrefix(apiKey, "sk-or-")
@@ -110,6 +124,12 @@ func main() {
 			rtr.SwapConfig(newCfg)
 		}, stopCh)
 		slog.Info("config auto-reload enabled", "path", cfgPath, "poll_seconds", cfg.ConfigReload.PollIntervalSeconds)
+	}
+
+	if cfg.OpenRouter.APIKeyFile != "" {
+		pollInterval := time.Duration(cfg.ConfigReload.PollIntervalSeconds) * time.Second
+		go pollAPIKeyFile(stopCh, cfg.OpenRouter.APIKeyFile, cfg.OpenRouter.APIKeyEnv, pollInterval, client, rtr.Stats)
+		slog.Info("api key file hot-reload enabled", "path", cfg.OpenRouter.APIKeyFile, "poll_seconds", cfg.ConfigReload.PollIntervalSeconds)
 	}
 
 	mux := http.NewServeMux()
@@ -185,4 +205,61 @@ func providerSummary(p config.ProviderConfig) string {
 		return ""
 	}
 	return " (" + strings.Join(parts, " ") + ")"
+}
+
+func loadAPIKeyFromFile(filePath, keyName string) (val string, found bool, err error) {
+	val, err = config.ParseEnvFile(filePath, keyName)
+	if err != nil {
+		return "", false, err
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "", false, nil
+	}
+	return val, true, nil
+}
+
+func pollAPIKeyFile(stopCh <-chan struct{}, filePath, keyName string, pollInterval time.Duration, client *openrouter.Client, stats *router.Stats) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	var lastHash string
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				slog.Warn("api key reload: read failed, keeping previous key", "path", filePath, "error", err)
+				continue
+			}
+			sum := sha256.Sum256(data)
+			newHash := hex.EncodeToString(sum[:])
+			if newHash == lastHash {
+				continue
+			}
+			lastHash = newHash
+
+			apiKey, found, err := loadAPIKeyFromFile(filePath, keyName)
+			if err != nil {
+				slog.Warn("api key reload: parse failed, keeping previous key", "path", filePath, "error", err)
+				continue
+			}
+			if !found || apiKey == "" {
+				slog.Warn("api key reload: no valid key in file, keeping previous key", "path", filePath)
+				continue
+			}
+
+			client.SetAPIKey(apiKey)
+			keyPrefixValid := strings.HasPrefix(apiKey, "sk-or-")
+			if !keyPrefixValid {
+				slog.Warn("api key reload: key does not have expected OpenRouter prefix (sk-or-); upstream may reject it")
+			}
+			stats.SetAPIKeyPresent(true)
+			stats.SetAPIKeyMeta(keyPrefixValid, len(apiKey))
+			stats.RecordAPIKeyReload(time.Now().Unix())
+			slog.Info("api key reloaded from file", "api_key_prefix_valid", keyPrefixValid, "api_key_length", len(apiKey))
+		}
+	}
 }

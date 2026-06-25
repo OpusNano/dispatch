@@ -12,7 +12,14 @@ const defaultConfigYAML = `# Dispatch — OpenRouter complexity router for OpenC
 
 openrouter:
   base_url: "https://openrouter.ai/api/v1"
+  # api_key_env: name of the env var holding the API key (default: OPENROUTER_API_KEY)
   api_key_env: "OPENROUTER_API_KEY"
+  # api_key_file: optional path to a .env file (mounted from host).
+  # When set, Dispatch reads the key from this file at startup and
+  # reloads it on every poll interval.  The file value wins over the
+  # env var when valid.  Edit your host .env and Dispatch picks up
+  # the change without a container restart.
+  api_key_file: "/config/.env"
   validate_models_on_start: false
   # OpenRouter app attribution: both fields below must be non-empty
   # or the OpenRouter dashboard shows App = "Unknown".
@@ -386,6 +393,10 @@ and routes it to the configured OpenRouter model for that level.
 3. Define model profiles under "model_profiles", then assign them to levels with "use:".
 4. Restart. Done — Dispatch routes by evidence of difficulty, not scary keywords.
 
+The default config mounts .env at /config/.env (read-only). Edit your host
+.env to change the API key — Dispatch hot-reloads it within the poll interval
+(default 3 s).  No container restart needed for key rotation.
+
 Config auto-generates if router.yaml doesn't exist. If you hand-write from scratch, you'll miss the default patterns and exemplars and may introduce YAML bugs. Let Dispatch generate the first config, then customize.
 
 ## How Routing Works
@@ -442,6 +453,7 @@ The selected model is visible in the X-Dispatch-Model response header and in str
 |-------|------|---------|-------------|
 | base_url | string | https://openrouter.ai/api/v1 | OpenRouter API base URL |
 | api_key_env | string | OPENROUTER_API_KEY | Env var name for the API key |
+| api_key_file | string | /config/.env | Path to a .env file mounted from host. File value wins when valid. Hot-reloaded on poll interval. |
 | validate_models_on_start | bool | false | Validate model IDs against OpenRouter at startup |
 | http_referer | string | https://github.com/OpusNano/dispatch | HTTP-Referer header; required for OpenRouter app attribution (shows "Unknown" if empty) |
 | site_title | string | Dispatch | X-OpenRouter-Title header; controls the app display name in OpenRouter Activity |
@@ -648,6 +660,9 @@ When the client sends a "provider" object in the request, it is **merged** with 
 ## Security
 
 - **Never put an API key in this config file.** Use "openrouter.api_key_env" to point to an env var.
+- **api_key_file** (default /config/.env) provides hot-reload of the API key without container restart.
+  The file value wins over the env var when valid. Edit host .env and Dispatch picks up the change
+  within the poll interval.
 - The default env var is OPENROUTER_API_KEY.
 - "log_prompts" is false by default. Enabling it logs full prompt content — understand the privacy implications.
 - "max_body_size" enforces a request size limit.

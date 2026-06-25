@@ -13,6 +13,7 @@ import (
 type OpenRouterConfig struct {
 	BaseURL               string `yaml:"base_url"`
 	APIKeyEnv             string `yaml:"api_key_env"`
+	APIKeyFile            string `yaml:"api_key_file"`
 	ValidateModelsOnStart bool   `yaml:"validate_models_on_start"`
 	HTTPReferer           string `yaml:"http_referer"`
 	SiteTitle             string `yaml:"site_title"`

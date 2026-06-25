@@ -24,6 +24,8 @@ The API key is loaded from `.env` via Docker Compose `env_file`. There is no hos
 
 The router automatically generates `/config/router.yaml`, `/config/DISPATCH.md`, and `/config/exemplars.yaml` on first run. Config changes are auto-reloaded without restart.
 
+**API key hot reload:** `.env` is mounted into the container at `/config/.env` (read-only). Edit your host `.env` to change the API key — Dispatch hot-reloads it within the poll interval (default 3 s). No container restart needed for key rotation. The previous working key stays active if the new file is invalid. Docker process env never changes; Dispatch reads the mounted file directly.
+
 **Warnings:**
 - The router listens on **plain HTTP** (`:18087`). For production, place it behind a TLS-terminating reverse proxy.
 - Never put your API key in the config file. Always use the `OPENROUTER_API_KEY` environment variable via `.env`.
@@ -299,6 +301,29 @@ chown 65532:65532 ./config
 dispatch: OPENROUTER_API_KEY environment variable not set
 ```
 Set it via `.env` file or `-e OPENROUTER_API_KEY=sk-or-...`.
+
+If `api_key_file` is configured (default `/config/.env`), Dispatch also
+reads the key from that file at startup. File value wins when valid.
+If both env var and file are missing/empty, Dispatch exits.
+
+### API key hot reload
+
+With default config, `.env` is mounted at `/config/.env` (read-only). Edit the
+host `.env` file and Dispatch picks up the new key within 3 seconds. No
+container restart needed.
+
+If the file is deleted, unreadable, or contains an empty key, Dispatch keeps
+the previous working key and logs a warning. Docker's process env never
+changes — Dispatch reads the mounted file directly.
+
+Verify reload success via `/debug/stats`:
+```bash
+curl -s http://localhost:18087/debug/stats | jq '{api_key_present, api_key_prefix_valid, api_key_length, api_key_reload_count, last_api_key_reload_unix}'
+```
+
+- `api_key_reload_count` increments on each successful reload.
+- `last_api_key_reload_unix` is the timestamp of the last reload.
+- The actual key value is never exposed in stats, logs, or headers.
 
 ### Upstream 401
 

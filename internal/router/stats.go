@@ -21,6 +21,9 @@ type Stats struct {
 	configReloadCount  atomic.Int64
 	lastConfigReload   atomic.Int64
 
+	apiKeyReloadCount atomic.Int64
+	lastAPIKeyReload  atomic.Int64
+
 	byLevel              map[string]*atomic.Int64
 	byModel              map[string]*atomic.Int64
 	byStatus             map[int]*atomic.Int64
@@ -161,6 +164,11 @@ func (s *Stats) RecordReload(unixTime int64) {
 	s.lastConfigReload.Store(unixTime)
 }
 
+func (s *Stats) RecordAPIKeyReload(unixTime int64) {
+	s.apiKeyReloadCount.Add(1)
+	s.lastAPIKeyReload.Store(unixTime)
+}
+
 type StatsSnapshot struct {
 	RequestsTotal        int64            `json:"requests_total"`
 	ByLevel              map[string]int64 `json:"by_level"`
@@ -191,6 +199,8 @@ type StatsSnapshot struct {
 	ApiKeyPresent          bool             `json:"api_key_present"`
 	ApiKeyPrefixValid      bool             `json:"api_key_prefix_valid"`
 	ApiKeyLength           int64            `json:"api_key_length"`
+	ApiKeyReloadCount      int64            `json:"api_key_reload_count"`
+	LastAPIKeyReloadUnix   int64            `json:"last_api_key_reload_unix"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -258,5 +268,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		ApiKeyPresent:          s.apiKeyPresent.Load(),
 		ApiKeyPrefixValid:      s.apiKeyPrefixValid.Load(),
 		ApiKeyLength:           s.apiKeyLength.Load(),
+		ApiKeyReloadCount:      s.apiKeyReloadCount.Load(),
+		LastAPIKeyReloadUnix:   s.lastAPIKeyReload.Load(),
 	}
 }

@@ -80,7 +80,7 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		logRequestTrace(requestID, parsed, isStream, cfg)
 	}
 
-	if strings.TrimSpace(rt.Client.APIKey) == "" {
+	if strings.TrimSpace(rt.Client.GetAPIKey()) == "" {
 		slog.Error("api key not configured", "request_id", requestID)
 		http.Error(w, "OpenRouter API key not configured", http.StatusServiceUnavailable)
 		return

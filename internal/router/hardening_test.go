@@ -967,3 +967,98 @@ func TestDebugStatsDoesNotExposeKey(t *testing.T) {
 		t.Error("/debug/stats should not contain Authorization bearer text")
 	}
 }
+
+func TestAPIKeyHotReloadUpdatesUpstreamAuth(t *testing.T) {
+	cfg, err := config.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer sk-or-v1-updated" {
+			http.Error(w, fmt.Sprintf("bad auth: %s", auth), http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "sk-or-v1-initial", "", "dispatch")
+	router := New(cfg, client)
+	router.Stats.SetAPIKeyPresent(true)
+
+	client.SetAPIKey("sk-or-v1-updated")
+	router.Stats.SetAPIKeyMeta(true, len("sk-or-v1-updated"))
+	router.Stats.RecordAPIKeyReload(100)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("hot-reloaded key should work: got %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	snap := router.Stats.Snapshot()
+	if snap.ApiKeyReloadCount == 0 {
+		t.Error("api_key_reload_count should be > 0 after reload")
+	}
+	if snap.LastAPIKeyReloadUnix == 0 {
+		t.Error("last_api_key_reload_unix should be > 0 after reload")
+	}
+}
+
+func TestAPIKeyHotReloadStatsUpdated(t *testing.T) {
+	stats := NewStats()
+	stats.SetAPIKeyPresent(true)
+	stats.SetAPIKeyMeta(true, len("sk-or-v1-initial"))
+	stats.RecordAPIKeyReload(100)
+
+	snap := stats.Snapshot()
+	if !snap.ApiKeyPresent {
+		t.Error("api_key_present should be true")
+	}
+	if !snap.ApiKeyPrefixValid {
+		t.Error("api_key_prefix_valid should be true")
+	}
+	if snap.ApiKeyLength != int64(len("sk-or-v1-initial")) {
+		t.Errorf("api_key_length = %d, want %d", snap.ApiKeyLength, len("sk-or-v1-initial"))
+	}
+	if snap.ApiKeyReloadCount != 1 {
+		t.Errorf("api_key_reload_count = %d, want 1", snap.ApiKeyReloadCount)
+	}
+	if snap.LastAPIKeyReloadUnix != 100 {
+		t.Errorf("last_api_key_reload_unix = %d, want 100", snap.LastAPIKeyReloadUnix)
+	}
+}
+
+func TestStatsDoesNotLeakAPIKeyValue(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg, err := config.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "sk-or-secret-key-12345", "", "dispatch")
+	router := New(cfg, client)
+	router.Stats.SetAPIKeyPresent(true)
+	router.Stats.SetAPIKeyMeta(true, len("sk-or-secret-key-12345"))
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/stats", nil)
+	rec := httptest.NewRecorder()
+	router.HandleDebugStats(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "sk-or-secret-key-12345") {
+		t.Error("/debug/stats should not leak API key value")
+	}
+	if strings.Contains(body, "\"api_key\"") {
+		t.Error("/debug/stats should not contain an api_key field with the value")
+	}
+}

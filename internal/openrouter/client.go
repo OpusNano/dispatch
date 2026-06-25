@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"dispatch/internal/classifier"
@@ -16,18 +17,19 @@ import (
 
 type Client struct {
 	BaseURL     string
-	APIKey      string
+	apiKey      string
 	HTTPReferer string
 	SiteTitle   string
 	HTTPClient  *http.Client
+	mu          sync.RWMutex
 }
 
 const maxReasonsHeaderLen = 1024
 
 func NewClient(baseURL, apiKey, httpReferer, siteTitle string) *Client {
-	return &Client{
+	c := &Client{
 		BaseURL:     baseURL,
-		APIKey:      apiKey,
+		apiKey:      apiKey,
 		HTTPReferer: httpReferer,
 		SiteTitle:   siteTitle,
 		HTTPClient: &http.Client{
@@ -41,6 +43,19 @@ func NewClient(baseURL, apiKey, httpReferer, siteTitle string) *Client {
 			Timeout: 0,
 		},
 	}
+	return c
+}
+
+func (c *Client) GetAPIKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.apiKey
+}
+
+func (c *Client) SetAPIKey(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.apiKey = key
 }
 
 func SetRoutingHeaders(w http.ResponseWriter, classification classifier.Classification) {
@@ -181,7 +196,7 @@ func (c *Client) ForwardNonStream(ctx context.Context, w http.ResponseWriter, bo
 }
 
 func (c *Client) setAuthHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Authorization", "Bearer "+c.GetAPIKey())
 	req.Header.Set("Content-Type", "application/json")
 	if c.HTTPReferer != "" {
 		req.Header.Set("HTTP-Referer", c.HTTPReferer)

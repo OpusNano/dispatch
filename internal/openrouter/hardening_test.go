@@ -2,6 +2,7 @@ package openrouter
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"dispatch/internal/config"
@@ -182,5 +183,39 @@ func TestRewritePreservesNumberPrecision(t *testing.T) {
 	}
 	if temp != 0.7 {
 		t.Errorf("temperature = %v, want 0.7", temp)
+	}
+}
+
+func TestClientSetGetAPIKey(t *testing.T) {
+	client := NewClient("https://test.example", "sk-or-v1-initial", "", "")
+	if key := client.GetAPIKey(); key != "sk-or-v1-initial" {
+		t.Errorf("initial key = %q, want sk-or-v1-initial", key)
+	}
+	client.SetAPIKey("sk-or-v1-updated")
+	if key := client.GetAPIKey(); key != "sk-or-v1-updated" {
+		t.Errorf("updated key = %q, want sk-or-v1-updated", key)
+	}
+}
+
+func TestClientAPIKeyConcurrentReadWrite(t *testing.T) {
+	client := NewClient("https://test.example", "sk-or-v1-start", "", "")
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client.SetAPIKey("sk-or-v1-updated")
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = client.GetAPIKey()
+		}()
+	}
+	wg.Wait()
+	if key := client.GetAPIKey(); key == "" {
+		t.Error("key should not be empty after concurrent access")
 	}
 }
