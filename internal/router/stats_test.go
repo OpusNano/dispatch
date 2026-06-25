@@ -8,8 +8,8 @@ import (
 func TestStatsRecordAndSnapshot(t *testing.T) {
 	s := NewStats()
 
-	s.Record("easy", "model-a", 200, false, 1_000_000, false, false, false, false, false)
-	s.Record("hard", "model-b", 200, true, 2_000_000, true, true, true, true, true)
+	s.Record("easy", "model-a", 200, false, 1_000_000, false, false, false, false, false, "", "", "", false)
+	s.Record("hard", "model-b", 200, true, 2_000_000, true, true, true, true, true, "", "", "", false)
 
 	snap := s.Snapshot()
 
@@ -74,7 +74,7 @@ func TestStatsConcurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func() {
 			for j := 0; j < 100; j++ {
-				s.Record("easy", "model-a", 200, false, 1000, false, false, false, false, false)
+				s.Record("easy", "model-a", 200, false, 1000, false, false, false, false, false, "", "", "", false)
 			}
 			done <- struct{}{}
 		}()

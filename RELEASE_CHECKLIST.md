@@ -23,13 +23,14 @@ docker build -t dispatch:rc .
 ### Docker
 ```bash
 mkdir -p ./config
-chown 65532:65532 ./config
 docker run -d --name dispatch \
   -p 18087:18087 \
   -e OPENROUTER_API_KEY=sk-or-... \
   -v ./config:/config \
   dispatch:rc
 ```
+
+(Optional non-root: add `--user 65532:65532` and `chown 65532:65532 ./config`.)
 
 ### Docker Compose
 ```bash
@@ -76,5 +77,8 @@ curl -s http://localhost:18087/debug/stats | jq
 | `OPENROUTER_API_KEY environment variable not set` | Missing API key | Set `-e OPENROUTER_API_KEY=...` or use `.env` |
 | Upstream 401 | Invalid/expired API key | Check key at openrouter.ai/keys |
 | Upstream 429 | Rate limited | Wait or upgrade plan |
+| "Provider returned error" | Provider rate-limited/down, fallbacks disabled | Enable `allow_fallbacks: true` or empty `provider.order: []` |
+| 502/503 from OpenRouter | Provider unavailable | Let OpenRouter fallback; check `/debug/stats` for patterns |
 | Port 18087 in use | Conflicting service | Change `server.listen` and port mapping |
 | OpenCode shows only `dispatch/auto` | Expected behavior | Check `X-Dispatch-Model` header for actual model |
+| OpenRouter shows App = Unknown | Empty http_referer/site_title | Set both in config; see README troubleshooting |

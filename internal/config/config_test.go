@@ -176,6 +176,25 @@ func TestCompiledPatternsPresent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigHasAttribution(t *testing.T) {
+	cfg, err := loadFromBytes([]byte(defaultConfigYAML))
+	if err != nil {
+		t.Fatalf("default config should load: %v", err)
+	}
+	if cfg.OpenRouter.HTTPReferer == "" {
+		t.Error("default config http_referer should be non-empty for OpenRouter app attribution")
+	}
+	if cfg.OpenRouter.SiteTitle == "" {
+		t.Error("default config site_title should be non-empty for OpenRouter app attribution")
+	}
+	if !strings.Contains(defaultConfigYAML, "https://github.com/OpusNano/dispatch") {
+		t.Error("default config YAML should contain the GitHub referer URL")
+	}
+	if !strings.Contains(defaultConfigYAML, "site_title: \"Dispatch\"") {
+		t.Error("default config YAML should contain site_title: \"Dispatch\"")
+	}
+}
+
 func TestProviderMergeField(t *testing.T) {
 	raw := strings.Replace(defaultConfigYAML, "data_collection: \"deny\"", "data_collection: \"allow\"", 1)
 	cfg, err := loadFromBytes([]byte(raw))

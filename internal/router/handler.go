@@ -139,18 +139,29 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
+	var upstreamMeta *openrouter.UpstreamErrorMeta
 	if isStream {
-		if err := rt.Client.ForwardStreaming(ctx, w, rewrittenBody); err != nil {
-			slog.Error("streaming forward failed", "error", err, "request_id", requestID)
+		m, ferr := rt.Client.ForwardStreaming(ctx, w, rewrittenBody)
+		if ferr != nil {
+			rt.Stats.RecordLocalError()
+			slog.Error("streaming forward failed", "error", ferr, "request_id", requestID)
 			return
 		}
+		upstreamMeta = m
 	} else {
-		if err := rt.Client.ForwardNonStream(ctx, w, rewrittenBody); err != nil {
+		m, ferr := rt.Client.ForwardNonStream(ctx, w, rewrittenBody)
+		if ferr != nil {
+			rt.Stats.RecordLocalError()
 			statusCode = http.StatusBadGateway
-			slog.Error("non-stream forward failed", "error", err, "request_id", requestID)
+			slog.Error("non-stream forward failed", "error", ferr, "request_id", requestID)
 			http.Error(w, "upstream error", statusCode)
 			return
 		}
+		upstreamMeta = m
+	}
+
+	if upstreamMeta != nil {
+		statusCode = upstreamMeta.HTTPStatus
 	}
 
 	routeDurationNs := time.Since(startTime).Nanoseconds()
@@ -182,8 +193,17 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		topicIgnored = true
 	}
 
+	var errType, errProv, errProvCode string
+	var embeddedErr bool
+	if upstreamMeta != nil {
+		errType = upstreamMeta.ErrorType
+		errProv = upstreamMeta.ProviderName
+		errProvCode = upstreamMeta.ProviderCode
+		embeddedErr = upstreamMeta.EmbeddedError
+	}
 	rt.Stats.Record(level, rm.Model, statusCode, isStream, routeDurationNs,
-		sessionEscalated, gateFired, frame.ContinuationDetected, lengthCapped, topicIgnored)
+		sessionEscalated, gateFired, frame.ContinuationDetected, lengthCapped, topicIgnored,
+		errType, errProv, errProvCode, embeddedErr)
 
 	if cfg.Debug.RequestIndexEnabled && cls.Frame != nil {
 		latestUserHash := hashShort(extractLatestUserText(parsed.Messages, frame.LatestUserIndex))
@@ -203,7 +223,27 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			CriticalGate:      gateName,
 			SessionEscalated:  sessionEscalated,
 		}
+		if upstreamMeta != nil {
+			meta.UpstreamErrorCode = upstreamMeta.ErrorCode
+			meta.UpstreamErrorType = upstreamMeta.ErrorType
+			meta.UpstreamProviderCode = upstreamMeta.ProviderCode
+			meta.UpstreamProvider = upstreamMeta.ProviderName
+			meta.UpstreamIsBYOK = upstreamMeta.IsBYOK
+			meta.UpstreamRetryAfter = upstreamMeta.RetryAfter
+			meta.UpstreamRetryable = upstreamMeta.Retryable
+			meta.UpstreamRawTruncated = upstreamMeta.RawTruncated
+			meta.EmbeddedError = upstreamMeta.EmbeddedError
+			if len(upstreamMeta.ErrorMessage) > 300 {
+				meta.UpstreamErrorMsg = upstreamMeta.ErrorMessage[:300]
+			} else {
+				meta.UpstreamErrorMsg = upstreamMeta.ErrorMessage
+			}
+		}
 		rt.RequestIndex.Store(meta)
+	}
+
+	if upstreamMeta != nil && cfg.Debug.LogMetadata {
+		openrouter.LogUpstreamError(requestID, upstreamMeta, level, rm.Model, time.Since(startTime))
 	}
 }
 

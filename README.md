@@ -153,6 +153,8 @@ Edit `/config/router.yaml`. See `/config/DISPATCH.md` for full documentation.
 openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key_env: "OPENROUTER_API_KEY"
+  http_referer: "https://github.com/OpusNano/dispatch"
+  site_title: "Dispatch"
 
 server:
   listen: ":18087"
@@ -226,6 +228,13 @@ OPENROUTER_API_KEY=sk-or-... ./dispatch --config /path/to/router.yaml
 | `X-Dispatch-Score-Risk` | Risk sub-score |
 | `X-Dispatch-Score-Agent-Pressure` | Agent pressure sub-score |
 | `X-Dispatch-Reasons` | Classification reasons (truncated) |
+| `X-Dispatch-Upstream-Status` | Upstream HTTP status (when >= 400) |
+| `X-Dispatch-Upstream-Error-Code` | Upstream error code from OpenRouter JSON |
+| `X-Dispatch-Upstream-Error-Type` | Typed error code (e.g. rate_limit_exceeded) |
+| `X-Dispatch-Upstream-Provider` | Provider name from error metadata |
+| `X-Dispatch-Upstream-Provider-Code` | Upstream provider error code |
+| `X-Dispatch-Upstream-Retry-After` | Retry-After value from upstream |
+| `X-Dispatch-Upstream-Retryable` | Heuristic: true/false/unknown |
 
 ## Security
 
@@ -289,6 +298,56 @@ The OpenRouter API key is invalid, expired, or has no credits. Check your key at
 
 ### Upstream 429
 OpenRouter rate limiting. Reduce request volume or upgrade your plan.
+
+### OpenRouter shows App = Unknown
+OpenRouter requires both `http_referer` and `site_title` to be non-empty for app attribution. Edit `/config/router.yaml`:
+```yaml
+openrouter:
+  http_referer: "https://github.com/OpusNano/dispatch"
+  site_title: "Dispatch"
+```
+Changes auto-reload in 3 seconds. Only new requests are affected. Run `dispatch --check-config` to see warnings if either field is empty.
+
+### "Provider returned error" / rate-limited upstream / 502 / 503
+
+Dispatch **does not retry internally** and **does not switch providers internally**. OpenRouter owns provider fallback behavior. Dispatch passes OpenRouter errors through unchanged so OpenCode's retry logic can work.
+
+If you see errors like `Provider returned error` or `rate-limited upstream`:
+
+1. **Check provider config** in `/config/router.yaml`:
+   - `provider.order: []` lets OpenRouter choose providers freely (most reliable)
+   - `provider.order: ["baidu/fp8"]` with `allow_fallbacks: true` — specific preference, fallback to others if unavailable
+   - `provider.order: ["baidu/fp8"]` with `allow_fallbacks: false` — **strict pinning**, no fallback, hard-fails on provider issues
+
+2. **Diagnose via debug endpoints**:
+   ```bash
+   # See aggregated error stats
+   curl -s http://localhost:18087/debug/stats | jq '{upstream_errors, by_upstream_provider, by_upstream_error_type, upstream_429_total, upstream_502_total, upstream_503_total}'
+
+   # Look up a specific request by its X-Dispatch-Request-Id
+   curl -s "http://localhost:18087/debug/request?id=<request_id>" | jq '{status, upstream_provider, upstream_error_type, upstream_provider_code, upstream_retryable, upstream_raw_truncated}'
+   ```
+
+3. **Common fixes**:
+   - Set `allow_fallbacks: true` or use empty `provider.order: []` to let OpenRouter route around problematic providers
+   - Remove strict provider pinning if the provider is frequently rate-limited or down
+   - Check `upstream_rate_limits_total` in stats to see if rate limits are the pattern
+
+4. **Common OpenRouter errors Dispatch passes through**:
+
+| Status | Meaning | Retryable |
+|--------|---------|:---------:|
+| 400 | Invalid request / content policy / context length | No |
+| 401 | Invalid API key / authentication | No |
+| 402 | Insufficient credits | No |
+| 403 | Forbidden / guardrail / moderation | No |
+| 408 | Timeout | Yes |
+| 429 | Rate limited (check Retry-After header) | Yes |
+| 502 | Provider unavailable / invalid response | Yes |
+| 503 | No provider available / overloaded | Yes |
+| 504 | Gateway timeout | Yes |
+
+When OpenRouter returns `Retry-After`, Dispatch passes it through unchanged. OpenCode reads it and handles retry timing.
 
 ### OpenCode only shows dispatch/auto
 This is expected. The router selects the actual model internally per request. Check the `X-Dispatch-Model` response header or container logs to see which model was used.

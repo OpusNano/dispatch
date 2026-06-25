@@ -14,6 +14,12 @@ openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key_env: "OPENROUTER_API_KEY"
   validate_models_on_start: false
+  # OpenRouter app attribution: both fields below must be non-empty
+  # or the OpenRouter dashboard shows App = "Unknown".
+  # http_referer is required by OpenRouter for app attribution.
+  # site_title controls the display name shown in the Activity page.
+  # Existing configs must be edited manually; these defaults only
+  # affect first-run config generation.
   http_referer: "https://github.com/OpusNano/dispatch"
   site_title: "Dispatch"
 
@@ -437,8 +443,8 @@ The selected model is visible in the X-Dispatch-Model response header and in str
 | base_url | string | https://openrouter.ai/api/v1 | OpenRouter API base URL |
 | api_key_env | string | OPENROUTER_API_KEY | Env var name for the API key |
 | validate_models_on_start | bool | false | Validate model IDs against OpenRouter at startup |
-| http_referer | string | https://github.com/OpusNano/dispatch | HTTP-Referer header sent upstream (controls OpenRouter app attribution) |
-| site_title | string | Dispatch | Optional X-OpenRouter-Title header |
+| http_referer | string | https://github.com/OpusNano/dispatch | HTTP-Referer header; required for OpenRouter app attribution (shows "Unknown" if empty) |
+| site_title | string | Dispatch | X-OpenRouter-Title header; controls the app display name in OpenRouter Activity |
 
 ### server
 | Field | Type | Default | Description |
@@ -666,6 +672,25 @@ Old critical gates (production_database_migration, database_rollback_production,
 data_loss_or_irreversible, auth_bypass_production) have been replaced with
 multi-signal evidence-based gates. See the patterns section above for details.
 
+## OpenRouter App Attribution
+
+Dispatch sends two headers on every upstream request to OpenRouter for app attribution:
+
+- **HTTP-Referer** — from openrouter.http_referer. Required by OpenRouter for app attribution. If empty, the OpenRouter Activity dashboard shows "Unknown" as the app name.
+- **X-OpenRouter-Title** — from openrouter.site_title. Controls the display name shown in the Activity page.
+
+Both must be non-empty for proper attribution. If your existing config has http_referer: "", edit it manually:
+
+    openrouter:
+      http_referer: "https://github.com/OpusNano/dispatch"
+      site_title: "Dispatch"
+
+Then wait for auto-reload (3s) or restart. New requests will carry attribution headers. Existing usage rows may remain "Unknown" — only new requests are affected.
+
+OpenRouter may also take some time to update the dashboard display after the first attributed request.
+
+Run "dispatch --check-config" to see warnings if either field is empty.
+
 ## Instructions for LLMs Editing This Config
 
 If you are an LLM editing this configuration:
@@ -716,6 +741,107 @@ Explain impact and test carefully:
           weight: 20
           reason: "context-dependent escalation"
 7. **Testing changes**: After editing, POST sample requests to /debug/route and verify the selected levels.
+
+## Error Passthrough & Diagnostics
+
+Dispatch passes OpenRouter errors through **unchanged**. It does NOT retry internally, switch providers, or implement fallback routing. OpenRouter owns provider fallback behavior.
+
+### How Errors Flow
+
+| Scenario | Dispatch behavior |
+|----------|-------------------|
+| Upstream returns 4xx/5xx JSON (non-stream) | Status, body, Content-Type, Retry-After passed through unchanged |
+| Upstream returns 4xx/5xx JSON (stream: true) | Status, body, Content-Type (application/json), Retry-After passed through — NOT forced to text/event-stream |
+| Upstream connection error (DNS, TCP, TLS) | Returns 502 Bad Gateway |
+| Successful 200 text/event-stream | Byte-for-byte SSE passthrough — not buffered or parsed |
+| 200 body with choices[].finish_reason="error" | Body preserved as 200; embedded error diagnosed |
+
+### Diagnostic Headers
+
+On upstream errors or embedded provider errors, Dispatch adds response headers:
+
+| Header | Example | When |
+|--------|---------|------|
+| X-Dispatch-Upstream-Status | 429 | Upstream status >= 400 or embedded error |
+| X-Dispatch-Upstream-Error-Code | 429 | error.code from OpenRouter JSON |
+| X-Dispatch-Upstream-Error-Type | rate_limit_exceeded | error.metadata.error_type |
+| X-Dispatch-Upstream-Provider-Code | OVERLOAD_429 | error.metadata.provider_code |
+| X-Dispatch-Upstream-Provider | Baidu | error.metadata.provider_name |
+| X-Dispatch-Upstream-Is-BYOK | false | Whether the error is from a BYOK provider |
+| X-Dispatch-Upstream-Retry-After | 30 | Retry-After header value |
+| X-Dispatch-Upstream-Retryable | true | Heuristic: 429/408/502/503/504 or known retryable error_type → true |
+
+No raw error text appears in response headers. Raw text is stored in logs and /debug/request metadata only (truncated to 300 chars).
+
+### Debug Endpoints for Errors
+
+    # Aggregated upstream error stats
+    curl -s http://localhost:18087/debug/stats | jq '{
+      upstream_errors_total,
+      by_upstream_error_type,
+      by_upstream_provider,
+      by_upstream_provider_code,
+      upstream_rate_limits_total,
+      upstream_429_total,
+      upstream_502_total,
+      upstream_503_total,
+      upstream_embedded_errors_total
+    }'
+
+    # Per-request error diagnostics
+    curl -s "http://localhost:18087/debug/request?id=<request_id>" | jq '{
+      status,
+      upstream_error_code,
+      upstream_error_type,
+      upstream_provider_code,
+      upstream_provider,
+      upstream_is_byok,
+      upstream_retry_after,
+      upstream_retryable,
+      upstream_raw_truncated,
+      embedded_error
+    }'
+
+### Provider Pinning & Failure Scenarios
+
+Dispatch does NOT compensate for provider failures by retrying or provider-hopping.
+
+**Most reliable** — let OpenRouter manage providers:
+
+    provider:
+      order: []
+      allow_fallbacks: true
+      data_collection: "deny"
+
+**Specific preference with fallback** — prefer one provider, but allow others:
+
+    provider:
+      order: ["baidu/fp8"]
+      allow_fallbacks: true
+      data_collection: "deny"
+
+**Strict pinning (brittle)** — no fallback, hard-fails on provider issues:
+
+    provider:
+      order: ["baidu/fp8"]
+      allow_fallbacks: false
+      data_collection: "deny"
+
+If allow_fallbacks is false and the pinned provider is rate-limited or down, OpenRouter returns 429/502/503. Dispatch passes the error through. OpenCode reads Retry-After and retries. No internal Dispatch fallback occurs.
+
+### Common OpenRouter Error Status Codes
+
+| Status | Meaning | Client can retry? |
+|:------:|---------|:-----------------:|
+| 400 | Invalid request / content policy / context length | No |
+| 401 | Invalid API key / authentication | No |
+| 402 | Insufficient credits | No |
+| 403 | Forbidden / guardrail / moderation | No |
+| 408 | Timeout | Yes |
+| 429 | Rate limited (see Retry-After header) | Yes |
+| 502 | Provider unavailable / invalid response | Yes |
+| 503 | No provider available / overloaded | Yes |
+| 504 | Gateway timeout | Yes |
 `
 
 const DefaultConfigFilename = "router.yaml"

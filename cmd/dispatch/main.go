@@ -76,6 +76,13 @@ func main() {
 		fmt.Printf("  caps: complexity=%.0f risk=%.0f agent_pressure=%.0f downgrade=%.0f\n",
 			cfg.Scoring.ComplexityCap, cfg.Scoring.RiskCap,
 			cfg.Scoring.AgentPressureCap, cfg.Scoring.DowngradeCap)
+
+		if cfg.OpenRouter.HTTPReferer == "" {
+			fmt.Printf("\n  warning: openrouter.http_referer is empty; OpenRouter app attribution may show as Unknown\n")
+		}
+		if cfg.OpenRouter.SiteTitle == "" {
+			fmt.Printf("  warning: openrouter.site_title is empty; OpenRouter app display name will not be set\n")
+		}
 		return
 	}
 

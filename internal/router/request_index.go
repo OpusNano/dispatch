@@ -19,6 +19,17 @@ type RequestMeta struct {
 	ReasonSummary     []string  `json:"reason_summary"`
 	CriticalGate      string    `json:"critical_gate,omitempty"`
 	SessionEscalated  bool      `json:"session_escalated"`
+
+	UpstreamErrorCode    int    `json:"upstream_error_code,omitempty"`
+	UpstreamErrorType    string `json:"upstream_error_type,omitempty"`
+	UpstreamProviderCode string `json:"upstream_provider_code,omitempty"`
+	UpstreamProvider     string `json:"upstream_provider,omitempty"`
+	UpstreamIsBYOK       string `json:"upstream_is_byok,omitempty"`
+	UpstreamRetryAfter   string `json:"upstream_retry_after,omitempty"`
+	UpstreamRetryable    string `json:"upstream_retryable,omitempty"`
+	UpstreamRawTruncated string `json:"upstream_raw_truncated,omitempty"`
+	UpstreamErrorMsg     string `json:"upstream_error_message_truncated,omitempty"`
+	EmbeddedError        bool   `json:"embedded_error"`
 }
 
 type requestIndex struct {

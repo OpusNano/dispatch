@@ -26,18 +26,34 @@ type Stats struct {
 	byStatus             map[int]*atomic.Int64
 	totalRouteDurationNs atomic.Int64
 	routeDurationCount   atomic.Int64
+
+	upstreamErrorsTotal     atomic.Int64
+	upstreamRateLimitsTotal atomic.Int64
+	upstream429Total        atomic.Int64
+	upstream502Total        atomic.Int64
+	upstream503Total        atomic.Int64
+	upstreamEmbeddedTotal   atomic.Int64
+
+	byUpstreamErrorType map[string]*atomic.Int64
+	byUpstreamProvider  map[string]*atomic.Int64
+	byUpstreamProvCode  map[string]*atomic.Int64
+
+	localProxyErrorsTotal atomic.Int64
 }
 
 func NewStats() *Stats {
 	return &Stats{
-		startTime: time.Now(),
-		byLevel:   make(map[string]*atomic.Int64),
-		byModel:   make(map[string]*atomic.Int64),
-		byStatus:  make(map[int]*atomic.Int64),
+		startTime:           time.Now(),
+		byLevel:             make(map[string]*atomic.Int64),
+		byModel:             make(map[string]*atomic.Int64),
+		byStatus:            make(map[int]*atomic.Int64),
+		byUpstreamErrorType: make(map[string]*atomic.Int64),
+		byUpstreamProvider:  make(map[string]*atomic.Int64),
+		byUpstreamProvCode:  make(map[string]*atomic.Int64),
 	}
 }
 
-func (s *Stats) Record(level, model string, statusCode int, isStream bool, routeDurationNs int64, sessionEscalated, gateFired, continuationDetected, lengthCapped, topicIgnored bool) {
+func (s *Stats) Record(level, model string, statusCode int, isStream bool, routeDurationNs int64, sessionEscalated, gateFired, continuationDetected, lengthCapped, topicIgnored bool, errorType string, providerName string, providerCode string, embeddedError bool) {
 	s.requestsTotal.Add(1)
 	if isStream {
 		s.streamCount.Add(1)
@@ -77,6 +93,54 @@ func (s *Stats) Record(level, model string, statusCode int, isStream bool, route
 	s.byStatus[statusCode].Add(1)
 	s.totalRouteDurationNs.Add(routeDurationNs)
 	s.routeDurationCount.Add(1)
+
+	if statusCode >= 400 || embeddedError {
+		s.upstreamErrorsTotal.Add(1)
+		switch {
+		case statusCode == 429:
+			s.upstream429Total.Add(1)
+			s.upstreamRateLimitsTotal.Add(1)
+		case statusCode == 502:
+			s.upstream502Total.Add(1)
+		case statusCode == 503:
+			s.upstream503Total.Add(1)
+		}
+		if errorType == "rate_limit_exceeded" {
+			s.upstreamRateLimitsTotal.Add(1)
+		}
+		if embeddedError {
+			s.upstreamEmbeddedTotal.Add(1)
+		}
+
+		if errorType != "" {
+			s.mu.Lock()
+			if _, ok := s.byUpstreamErrorType[errorType]; !ok {
+				s.byUpstreamErrorType[errorType] = &atomic.Int64{}
+			}
+			s.mu.Unlock()
+			s.byUpstreamErrorType[errorType].Add(1)
+		}
+		if providerName != "" {
+			s.mu.Lock()
+			if _, ok := s.byUpstreamProvider[providerName]; !ok {
+				s.byUpstreamProvider[providerName] = &atomic.Int64{}
+			}
+			s.mu.Unlock()
+			s.byUpstreamProvider[providerName].Add(1)
+		}
+		if providerCode != "" {
+			s.mu.Lock()
+			if _, ok := s.byUpstreamProvCode[providerCode]; !ok {
+				s.byUpstreamProvCode[providerCode] = &atomic.Int64{}
+			}
+			s.mu.Unlock()
+			s.byUpstreamProvCode[providerCode].Add(1)
+		}
+	}
+}
+
+func (s *Stats) RecordLocalError() {
+	s.localProxyErrorsTotal.Add(1)
 }
 
 func (s *Stats) RecordReload(unixTime int64) {
@@ -100,6 +164,17 @@ type StatsSnapshot struct {
 	UptimeSeconds        int64            `json:"uptime_seconds"`
 	ConfigReloadCount    int64            `json:"config_reload_count"`
 	LastConfigReloadUnix int64            `json:"last_config_reload_unix"`
+
+	UpstreamErrorsTotal    int64            `json:"upstream_errors_total"`
+	ByUpstreamErrorType    map[string]int64 `json:"by_upstream_error_type"`
+	ByUpstreamProvider     map[string]int64 `json:"by_upstream_provider"`
+	ByUpstreamProviderCode map[string]int64 `json:"by_upstream_provider_code"`
+	UpstreamRateLimits     int64            `json:"upstream_rate_limits_total"`
+	Upstream429Total       int64            `json:"upstream_429_total"`
+	Upstream502Total       int64            `json:"upstream_502_total"`
+	Upstream503Total       int64            `json:"upstream_503_total"`
+	UpstreamEmbeddedTotal  int64            `json:"upstream_embedded_errors_total"`
+	LocalProxyErrorsTotal  int64            `json:"local_proxy_errors_total"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -115,6 +190,18 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	byStatus := make(map[int]int64, len(s.byStatus))
 	for k, v := range s.byStatus {
 		byStatus[k] = v.Load()
+	}
+	byErrType := make(map[string]int64, len(s.byUpstreamErrorType))
+	for k, v := range s.byUpstreamErrorType {
+		byErrType[k] = v.Load()
+	}
+	byProv := make(map[string]int64, len(s.byUpstreamProvider))
+	for k, v := range s.byUpstreamProvider {
+		byProv[k] = v.Load()
+	}
+	byProvCode := make(map[string]int64, len(s.byUpstreamProvCode))
+	for k, v := range s.byUpstreamProvCode {
+		byProvCode[k] = v.Load()
 	}
 	s.mu.RUnlock()
 
@@ -141,5 +228,16 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		UptimeSeconds:        int64(time.Since(s.startTime).Seconds()),
 		ConfigReloadCount:    s.configReloadCount.Load(),
 		LastConfigReloadUnix: s.lastConfigReload.Load(),
+
+		UpstreamErrorsTotal:    s.upstreamErrorsTotal.Load(),
+		ByUpstreamErrorType:    byErrType,
+		ByUpstreamProvider:     byProv,
+		ByUpstreamProviderCode: byProvCode,
+		UpstreamRateLimits:     s.upstreamRateLimitsTotal.Load(),
+		Upstream429Total:       s.upstream429Total.Load(),
+		Upstream502Total:       s.upstream502Total.Load(),
+		Upstream503Total:       s.upstream503Total.Load(),
+		UpstreamEmbeddedTotal:  s.upstreamEmbeddedTotal.Load(),
+		LocalProxyErrorsTotal:  s.localProxyErrorsTotal.Load(),
 	}
 }

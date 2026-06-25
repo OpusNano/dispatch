@@ -81,18 +81,38 @@ func truncateReasons(reasons []string) string {
 	return buf.String()
 }
 
-func (c *Client) ForwardStreaming(ctx context.Context, w http.ResponseWriter, body []byte) error {
+func (c *Client) ForwardStreaming(ctx context.Context, w http.ResponseWriter, body []byte) (*UpstreamErrorMeta, error) {
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create upstream request: %w", err)
+		return nil, fmt.Errorf("create upstream request: %w", err)
 	}
 	c.setAuthHeaders(upstreamReq)
 
 	resp, err := c.HTTPClient.Do(upstreamReq)
 	if err != nil {
-		return fmt.Errorf("upstream request failed: %w", err)
+		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	var errorMeta *UpstreamErrorMeta
+
+	if resp.StatusCode >= 400 {
+		errorBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDiagnosticParseSize))
+		resp.Body.Close()
+		if readErr != nil {
+			slog.Debug("reading upstream error body for streaming", "error", readErr)
+		}
+		errorMeta = ExtractErrorMeta(resp, errorBody)
+		copyUpstreamHeaders(w, resp)
+		if errorMeta != nil {
+			errorMeta.SetDiagnosticHeaders(w)
+		}
+		w.WriteHeader(resp.StatusCode)
+		if len(errorBody) > 0 {
+			w.Write(errorBody)
+		}
+		return errorMeta, nil
+	}
 
 	copyUpstreamHeaders(w, resp)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -102,50 +122,62 @@ func (c *Client) ForwardStreaming(ctx context.Context, w http.ResponseWriter, bo
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return fmt.Errorf("streaming not supported")
+		return nil, fmt.Errorf("streaming not supported")
 	}
 
 	buf := make([]byte, 4096)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, nil
 		default:
 		}
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return nil
+				return nil, nil
 			}
 			flusher.Flush()
 		}
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return nil, nil
 			}
 			slog.Debug("upstream read error", "error", err)
-			return nil
+			return nil, nil
 		}
 	}
 }
 
-func (c *Client) ForwardNonStream(ctx context.Context, w http.ResponseWriter, body []byte) error {
+func (c *Client) ForwardNonStream(ctx context.Context, w http.ResponseWriter, body []byte) (*UpstreamErrorMeta, error) {
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create upstream request: %w", err)
+		return nil, fmt.Errorf("create upstream request: %w", err)
 	}
 	c.setAuthHeaders(upstreamReq)
 
 	resp, err := c.HTTPClient.Do(upstreamReq)
 	if err != nil {
-		return fmt.Errorf("upstream request failed: %w", err)
+		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDiagnosticParseSize))
+	if readErr != nil {
+		slog.Debug("reading upstream response body", "error", readErr)
+	}
+
+	errorMeta := ExtractErrorMeta(resp, respBody)
 	copyUpstreamHeaders(w, resp)
+	if errorMeta != nil {
+		errorMeta.SetDiagnosticHeaders(w)
+	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-	return nil
+	if len(respBody) > 0 {
+		w.Write(respBody)
+	}
+
+	return errorMeta, nil
 }
 
 func (c *Client) setAuthHeaders(req *http.Request) {
@@ -208,4 +240,44 @@ func LogRouteMetrics(classification classifier.Classification, duration time.Dur
 		"body_bytes", bodySize,
 		"reasons", classification.Reasons,
 	)
+}
+
+func LogUpstreamError(requestID string, meta *UpstreamErrorMeta, level string, model string, routeDuration time.Duration) {
+	if meta == nil {
+		return
+	}
+
+	attrs := []any{
+		"request_id", requestID,
+		"level", level,
+		"model", model,
+		"upstream_status", meta.HTTPStatus,
+		"upstream_error_code", meta.ErrorCode,
+		"upstream_retryable", meta.Retryable,
+		"route_duration_ms", routeDuration.Milliseconds(),
+	}
+
+	if meta.ErrorType != "" {
+		attrs = append(attrs, "upstream_error_type", meta.ErrorType)
+	}
+	if meta.ProviderCode != "" {
+		attrs = append(attrs, "upstream_provider_code", meta.ProviderCode)
+	}
+	if meta.ProviderName != "" {
+		attrs = append(attrs, "upstream_provider", meta.ProviderName)
+	}
+	if meta.IsBYOK != "" {
+		attrs = append(attrs, "upstream_is_byok", meta.IsBYOK)
+	}
+	if meta.RetryAfter != "" {
+		attrs = append(attrs, "upstream_retry_after", meta.RetryAfter)
+	}
+	if meta.RawTruncated != "" {
+		attrs = append(attrs, "upstream_raw_truncated", meta.RawTruncated)
+	}
+	if meta.EmbeddedError {
+		attrs = append(attrs, "embedded_error", true)
+	}
+
+	slog.Warn("upstream_error", attrs...)
 }
