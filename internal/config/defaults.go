@@ -688,10 +688,6 @@ secret_leak_evidence=25, destructive_action_evidence=25, etc.).
 
 If you have a custom router.yaml with old pattern IDs, update them to the new IDs.
 
-If your router.yaml still has api_key_file: "/config/.env", update it to
-api_key_file: "/dispatch.env" and rebuild the container. /config is for
-generated config/docs only — secrets live at /dispatch.env.
-If config/.env exists on the host from an older run, delete it (rm -f config/.env).
 Old critical gates (production_database_migration, database_rollback_production,
 data_loss_or_irreversible, auth_bypass_production) have been replaced with
 multi-signal evidence-based gates. See the patterns section above for details.

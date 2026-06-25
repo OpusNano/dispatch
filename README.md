@@ -316,9 +316,8 @@ If the file is deleted, unreadable, or contains an empty key, Dispatch keeps
 the previous working key and logs a warning. Docker's process env never
 changes — Dispatch reads the mounted file directly.
 
-Avoid putting `.env` inside `/config` — that directory is for generated
-config/docs only. If `config/.env` exists from an older run, it is safe to
-delete after migrating to `/dispatch.env`.
+`/config` is for generated config/docs only — never place secrets there.
+If an older experimental run created `config/.env`, delete it: `rm -f config/.env`.
 
 Verify reload success via `/debug/stats`:
 ```bash
