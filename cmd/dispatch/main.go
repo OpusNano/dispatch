@@ -91,11 +91,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "dispatch: %s environment variable not set or empty\n", cfg.OpenRouter.APIKeyEnv)
 		os.Exit(1)
 	}
+	keyPrefixValid := strings.HasPrefix(apiKey, "sk-or-")
+	if !keyPrefixValid {
+		slog.Warn("api key does not have expected OpenRouter prefix (sk-or-); upstream may reject it")
+	}
 
 	client := openrouter.NewClient(cfg.OpenRouter.BaseURL, apiKey, cfg.OpenRouter.HTTPReferer, cfg.OpenRouter.SiteTitle)
 
 	rtr := router.New(cfg, client)
 	rtr.Stats.SetAPIKeyPresent(true)
+	rtr.Stats.SetAPIKeyMeta(keyPrefixValid, len(apiKey))
 
 	stopCh := make(chan struct{})
 
@@ -132,6 +137,8 @@ func main() {
 		"openrouter_base", cfg.OpenRouter.BaseURL,
 		"api_key_env", cfg.OpenRouter.APIKeyEnv,
 		"api_key_present", true,
+		"api_key_prefix_valid", keyPrefixValid,
+		"api_key_length", len(apiKey),
 		"version", version.Version,
 	)
 

@@ -80,7 +80,7 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		logRequestTrace(requestID, parsed, isStream, cfg)
 	}
 
-	if rt.Client.APIKey == "" {
+	if strings.TrimSpace(rt.Client.APIKey) == "" {
 		slog.Error("api key not configured", "request_id", requestID)
 		http.Error(w, "OpenRouter API key not configured", http.StatusServiceUnavailable)
 		return
@@ -256,13 +256,15 @@ func (rt *Router) determineOverride(r *http.Request, rawBody []byte) (level stri
 	}
 
 	model := extractModel(rawBody)
-	if strings.HasPrefix(model, "dispatch/") {
-		alias := strings.TrimPrefix(model, "dispatch/")
-		if alias == "auto" {
+	for strings.HasPrefix(model, "dispatch/") {
+		model = strings.TrimPrefix(model, "dispatch/")
+	}
+	if model != "" {
+		if model == "auto" {
 			return "", ""
 		}
-		if validLevel(alias) {
-			return alias, "model-alias:" + model
+		if validLevel(model) {
+			return model, "model-alias:dispatch/" + model
 		}
 	}
 

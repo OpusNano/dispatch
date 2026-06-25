@@ -40,7 +40,9 @@ type Stats struct {
 
 	localProxyErrorsTotal atomic.Int64
 
-	apiKeyPresent atomic.Bool
+	apiKeyPresent     atomic.Bool
+	apiKeyPrefixValid atomic.Bool
+	apiKeyLength      atomic.Int64
 }
 
 func NewStats() *Stats {
@@ -145,6 +147,11 @@ func (s *Stats) SetAPIKeyPresent(present bool) {
 	s.apiKeyPresent.Store(present)
 }
 
+func (s *Stats) SetAPIKeyMeta(prefixValid bool, length int) {
+	s.apiKeyPrefixValid.Store(prefixValid)
+	s.apiKeyLength.Store(int64(length))
+}
+
 func (s *Stats) RecordLocalError() {
 	s.localProxyErrorsTotal.Add(1)
 }
@@ -182,6 +189,8 @@ type StatsSnapshot struct {
 	UpstreamEmbeddedTotal  int64            `json:"upstream_embedded_errors_total"`
 	LocalProxyErrorsTotal  int64            `json:"local_proxy_errors_total"`
 	ApiKeyPresent          bool             `json:"api_key_present"`
+	ApiKeyPrefixValid      bool             `json:"api_key_prefix_valid"`
+	ApiKeyLength           int64            `json:"api_key_length"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -247,5 +256,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		UpstreamEmbeddedTotal:  s.upstreamEmbeddedTotal.Load(),
 		LocalProxyErrorsTotal:  s.localProxyErrorsTotal.Load(),
 		ApiKeyPresent:          s.apiKeyPresent.Load(),
+		ApiKeyPrefixValid:      s.apiKeyPrefixValid.Load(),
+		ApiKeyLength:           s.apiKeyLength.Load(),
 	}
 }

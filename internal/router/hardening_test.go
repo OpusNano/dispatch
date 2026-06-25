@@ -64,6 +64,59 @@ func TestMissingAPIKeyReturns503(t *testing.T) {
 	}
 }
 
+func TestWhitespaceOnlyAPIKeyReturns503(t *testing.T) {
+	cfg, err := config.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called with whitespace-only API key")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "  \t\n  ", "", "dispatch")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("whitespace-only key should return 503, got %d", rec.Code)
+	}
+}
+
+func TestDoublePrefixModelAlias(t *testing.T) {
+	cfg, err := config.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "sk-or-v1-test", "", "dispatch")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/dispatch/critical","messages":[{"role":"user","content":"auth bypass in production lets users access other accounts"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("double-prefix alias should resolve: got %d", rec.Code)
+	}
+	level := rec.Header().Get("X-Dispatch-Level")
+	if level != "critical" {
+		t.Errorf("double-prefix should force critical: got %s", level)
+	}
+}
+
 func TestUnknownPathReturns404(t *testing.T) {
 	router, _ := setupTest(t)
 	mux := http.NewServeMux()

@@ -316,11 +316,13 @@ If the error body says `"Missing Authentication header"`, it means **Dispatch di
 
 3. **Check docker-compose.yml**: the `dispatch` service should have `env_file: .env` **only**. If there is an explicit `environment: OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}` line, remove it. The `${VAR}` substitution resolves from the host and can override the `.env` file with an empty string.
 
-4. **Check startup log**: Dispatch logs `api_key_present: true` on successful startup. If missing, the env var is not set or the config field is wrong.
+4. **Check startup log**: Dispatch logs `api_key_present: true`, `api_key_prefix_valid: true`, and `api_key_length` on successful startup. The key itself is never logged.
 
 5. **Check /debug/stats**: `api_key_present` field shows whether Dispatch has an API key loaded.
 
 6. **If env exists and error persists**: this is a Dispatch bug/regression — report with the startup log output.
+
+If the error is `"User not found."` or `"Invalid API key"` instead: **auth IS working**. The Authorization header was sent, but the API key in `.env` is invalid or expired. Check your OpenRouter dashboard.
 
 Do not use `docker exec printenv dispatch` — scratch containers have no shell.
 
