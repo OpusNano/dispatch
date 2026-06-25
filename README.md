@@ -24,7 +24,7 @@ The API key is loaded from `.env` via Docker Compose `env_file`. There is no hos
 
 The router automatically generates `/config/router.yaml`, `/config/DISPATCH.md`, and `/config/exemplars.yaml` on first run. Config changes are auto-reloaded without restart.
 
-**API key hot reload:** `.env` is mounted into the container at `/config/.env` (read-only). Edit your host `.env` to change the API key — Dispatch hot-reloads it within the poll interval (default 3 s). No container restart needed for key rotation. The previous working key stays active if the new file is invalid. Docker process env never changes; Dispatch reads the mounted file directly.
+**API key hot reload:** `.env` is mounted into the container at `/dispatch.env` (read-only, outside `/config`). Edit your host `.env` to change the API key — Dispatch hot-reloads it within the poll interval (default 3 s). No container restart needed for key rotation. The previous working key stays active if the new file is invalid. Docker process env never changes; Dispatch reads the mounted file directly. `/config` contains only generated config/docs, never secrets.
 
 **Warnings:**
 - The router listens on **plain HTTP** (`:18087`). For production, place it behind a TLS-terminating reverse proxy.
@@ -302,19 +302,23 @@ dispatch: OPENROUTER_API_KEY environment variable not set
 ```
 Set it via `.env` file or `-e OPENROUTER_API_KEY=sk-or-...`.
 
-If `api_key_file` is configured (default `/config/.env`), Dispatch also
+If `api_key_file` is configured (default `/dispatch.env`), Dispatch also
 reads the key from that file at startup. File value wins when valid.
 If both env var and file are missing/empty, Dispatch exits.
 
 ### API key hot reload
 
-With default config, `.env` is mounted at `/config/.env` (read-only). Edit the
-host `.env` file and Dispatch picks up the new key within 3 seconds. No
-container restart needed.
+With default config, `.env` is mounted at `/dispatch.env` (read-only, outside
+`/config`). Edit the host `.env` file and Dispatch picks up the new key within
+3 seconds. No container restart needed.
 
 If the file is deleted, unreadable, or contains an empty key, Dispatch keeps
 the previous working key and logs a warning. Docker's process env never
 changes — Dispatch reads the mounted file directly.
+
+Avoid putting `.env` inside `/config` — that directory is for generated
+config/docs only. If `config/.env` exists from an older run, it is safe to
+delete after migrating to `/dispatch.env`.
 
 Verify reload success via `/debug/stats`:
 ```bash

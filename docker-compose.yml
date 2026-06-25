@@ -9,4 +9,4 @@ services:
       - "18087:18087"
     volumes:
       - ./config:/config
-      - ./.env:/config/.env:ro
+      - ./.env:/dispatch.env:ro

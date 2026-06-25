@@ -211,10 +211,78 @@ func TestDefaultConfigHasAPIKeyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OpenRouter.APIKeyFile != "/config/.env" {
-		t.Errorf("APIKeyFile = %q, want /config/.env", cfg.OpenRouter.APIKeyFile)
+	if cfg.OpenRouter.APIKeyFile != "/dispatch.env" {
+		t.Errorf("APIKeyFile = %q, want /dispatch.env", cfg.OpenRouter.APIKeyFile)
 	}
 	if cfg.OpenRouter.APIKeyEnv != "OPENROUTER_API_KEY" {
 		t.Errorf("APIKeyEnv = %q, want OPENROUTER_API_KEY", cfg.OpenRouter.APIKeyEnv)
+	}
+}
+
+func TestEnsureConfigDirDoesNotCreateEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureConfigDir(dir); err != nil {
+		t.Fatalf("EnsureConfigDir: %v", err)
+	}
+
+	envPath := filepath.Join(dir, ".env")
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Errorf(".env file should not exist in config dir: %s exists (ensure config dir does not create secret files)", envPath)
+	}
+
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".env") {
+			t.Errorf("found .env variant in config dir: %s — config dir must not contain env files", f.Name())
+		}
+	}
+}
+
+func TestParseEnvFileMissingReturnsError(t *testing.T) {
+	val, err := ParseEnvFile("/nonexistent/file/path.env", "OPENROUTER_API_KEY")
+	if err == nil {
+		t.Error("ParseEnvFile on missing file should return error")
+	}
+	if val != "" {
+		t.Errorf("ParseEnvFile on missing file should return empty string, got %q", val)
+	}
+}
+
+func TestParseEnvFileValidKeyOverridesEnvVar(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "test.env")
+	content := "OPENROUTER_API_KEY=sk-or-from-file\n"
+	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	val, err := ParseEnvFile(envPath, "OPENROUTER_API_KEY")
+	if err != nil {
+		t.Fatalf("ParseEnvFile: %v", err)
+	}
+	if val != "sk-or-from-file" {
+		t.Errorf("file key should override: got %q, want sk-or-from-file", val)
+	}
+
+	// The env var fallback is not tested here — that logic lives in
+	// main.go loadAPIKeyFromFile where a missing file or empty key
+	// falls back to os.Getenv(). This test confirms ParseEnvFile
+	// returns correct value from a valid file.
+}
+
+func TestDockerComposeMountsEnvAsDispatchEnv(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "docker-compose.yml"))
+	if err != nil {
+		t.Skipf("skipping: cannot read docker-compose.yml: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "./.env:/dispatch.env:ro") {
+		t.Error("docker-compose.yml must mount ./.env to /dispatch.env:ro for hot reload outside /config")
+	}
+	if strings.Contains(content, "/config/.env") {
+		t.Error("docker-compose.yml must NOT mount /config/.env — use /dispatch.env to keep /config clean of secret files")
 	}
 }
