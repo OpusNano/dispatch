@@ -34,9 +34,13 @@ docker run -d --name dispatch \
 
 ### Docker Compose
 ```bash
+cp .env.example .env
 # Edit .env with your OpenRouter API key
+$EDITOR .env
 docker compose up -d --build
 ```
+
+`env_file: .env` in `docker-compose.yml` loads the key into the container. No host-export step is needed. `.env` is gitignored.
 
 ### Plain Binary
 ```bash

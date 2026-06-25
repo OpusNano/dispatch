@@ -86,9 +86,9 @@ func main() {
 		return
 	}
 
-	apiKey := os.Getenv(cfg.OpenRouter.APIKeyEnv)
+	apiKey := strings.TrimSpace(os.Getenv(cfg.OpenRouter.APIKeyEnv))
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "dispatch: %s environment variable not set\n", cfg.OpenRouter.APIKeyEnv)
+		fmt.Fprintf(os.Stderr, "dispatch: %s environment variable not set or empty\n", cfg.OpenRouter.APIKeyEnv)
 		os.Exit(1)
 	}
 

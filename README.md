@@ -7,13 +7,20 @@ Classifies chat completion requests into four levels (easy, medium, hard, critic
 ## Quick Start
 
 ```bash
-# Copy and edit the env file with your OpenRouter API key
+# Clone and prepare
+git clone <repo>
+cd dispatch
+
+# Create and edit the env file with your OpenRouter API key
 cp .env.example .env
+# Use cp (not mv) so .env.example stays in the working tree
 $EDITOR .env
 
 # Build and run (config auto-generates on first start)
 docker compose up -d --build
 ```
+
+The API key is loaded from `.env` via Docker Compose `env_file`. There is no host-export step. `.env` is gitignored — your key stays local.
 
 The router automatically generates `/config/router.yaml`, `/config/DISPATCH.md`, and `/config/exemplars.yaml` on first run. Config changes are auto-reloaded without restart.
 
@@ -307,11 +314,13 @@ If the error body says `"Missing Authentication header"`, it means **Dispatch di
 
 2. **Verify router.yaml matches**: `openrouter.api_key_env` must be `"OPENROUTER_API_KEY"` (the env var name, not the key value). The generated config has this by default.
 
-3. **Check startup log**: Dispatch logs `api_key_present: true` on successful startup. If missing, the env var is not set or the config field is wrong.
+3. **Check docker-compose.yml**: the `dispatch` service should have `env_file: .env` **only**. If there is an explicit `environment: OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}` line, remove it. The `${VAR}` substitution resolves from the host and can override the `.env` file with an empty string.
 
-4. **Check /debug/stats**: `api_key_present` field shows whether Dispatch has an API key loaded.
+4. **Check startup log**: Dispatch logs `api_key_present: true` on successful startup. If missing, the env var is not set or the config field is wrong.
 
-5. **If env exists and error persists**: this is a Dispatch bug/regression — report with the startup log output.
+5. **Check /debug/stats**: `api_key_present` field shows whether Dispatch has an API key loaded.
+
+6. **If env exists and error persists**: this is a Dispatch bug/regression — report with the startup log output.
 
 Do not use `docker exec printenv dispatch` — scratch containers have no shell.
 
