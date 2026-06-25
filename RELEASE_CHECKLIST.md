@@ -76,6 +76,7 @@ curl -s http://localhost:18087/debug/stats | jq
 | `permission denied` on first run | `/config` not owned by UID 65532 | `chown 65532:65532 ./config` |
 | `OPENROUTER_API_KEY environment variable not set` | Missing API key | Set `-e OPENROUTER_API_KEY=...` or use `.env` |
 | Upstream 401 | Invalid/expired API key | Check key at openrouter.ai/keys |
+| Upstream 401 ("Missing Authentication header") | Dispatch not sending Authorization; env var missing or config mismatch | docker inspect env, check api_key_env in router.yaml, check api_key_present in /debug/stats and startup log |
 | Upstream 429 | Rate limited | Wait or upgrade plan |
 | "Provider returned error" | Provider rate-limited/down, fallbacks disabled | Enable `allow_fallbacks: true` or empty `provider.order: []` |
 | 502/503 from OpenRouter | Provider unavailable | Let OpenRouter fallback; check `/debug/stats` for patterns |

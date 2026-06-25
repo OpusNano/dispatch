@@ -39,6 +39,8 @@ type Stats struct {
 	byUpstreamProvCode  map[string]*atomic.Int64
 
 	localProxyErrorsTotal atomic.Int64
+
+	apiKeyPresent atomic.Bool
 }
 
 func NewStats() *Stats {
@@ -139,6 +141,10 @@ func (s *Stats) Record(level, model string, statusCode int, isStream bool, route
 	}
 }
 
+func (s *Stats) SetAPIKeyPresent(present bool) {
+	s.apiKeyPresent.Store(present)
+}
+
 func (s *Stats) RecordLocalError() {
 	s.localProxyErrorsTotal.Add(1)
 }
@@ -175,6 +181,7 @@ type StatsSnapshot struct {
 	Upstream503Total       int64            `json:"upstream_503_total"`
 	UpstreamEmbeddedTotal  int64            `json:"upstream_embedded_errors_total"`
 	LocalProxyErrorsTotal  int64            `json:"local_proxy_errors_total"`
+	ApiKeyPresent          bool             `json:"api_key_present"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -239,5 +246,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		Upstream503Total:       s.upstream503Total.Load(),
 		UpstreamEmbeddedTotal:  s.upstreamEmbeddedTotal.Load(),
 		LocalProxyErrorsTotal:  s.localProxyErrorsTotal.Load(),
+		ApiKeyPresent:          s.apiKeyPresent.Load(),
 	}
 }

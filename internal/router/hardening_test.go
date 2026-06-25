@@ -608,3 +608,309 @@ func TestExtractTextFromToolCallsDirect(t *testing.T) {
 		})
 	}
 }
+
+func TestNonStreamingSendsAuthorization(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	var receivedAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if receivedAuth != "Bearer test-key" {
+		t.Errorf("upstream Authorization = %q, want %q", receivedAuth, "Bearer test-key")
+	}
+}
+
+func TestStreamingSendsAuthorization(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	var receivedAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "stream-key", "", "")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if receivedAuth != "Bearer stream-key" {
+		t.Errorf("streaming upstream Authorization = %q, want %q", receivedAuth, "Bearer stream-key")
+	}
+}
+
+func TestClientAuthorizationNotForwarded(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	var receivedAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "server-key", "", "")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer client-leaked-key")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if receivedAuth != "Bearer server-key" {
+		t.Errorf("upstream Authorization = %q, client key should not leak; want %q", receivedAuth, "Bearer server-key")
+	}
+}
+
+func TestClientAuthorizationNotForwardedStreaming(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	var receivedAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "server-stream-key", "", "")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer evil-client-key")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if receivedAuth != "Bearer server-stream-key" {
+		t.Errorf("streaming upstream Authorization = %q, client key should not leak; want %q", receivedAuth, "Bearer server-stream-key")
+	}
+}
+
+func TestEmptyAPIKeyReturnsLocal503(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called when API key is empty")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "", "", "")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("empty API key should return 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Errorf("body should mention missing key, got: %s", rec.Body.String())
+	}
+}
+
+func TestAttributionHeadersSentWithAuthorization(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	var receivedHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "https://example.com/referer", "TestApp")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := receivedHeaders.Get("Authorization"); got != "Bearer test-key" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-key")
+	}
+	if got := receivedHeaders.Get("HTTP-Referer"); got != "https://example.com/referer" {
+		t.Errorf("HTTP-Referer = %q, want %q", got, "https://example.com/referer")
+	}
+	if got := receivedHeaders.Get("X-OpenRouter-Title"); got != "TestApp" {
+		t.Errorf("X-OpenRouter-Title = %q, want %q", got, "TestApp")
+	}
+}
+
+func TestStatsShowsApiKeyPresent(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "")
+	router := New(cfg, client)
+	router.Stats.SetAPIKeyPresent(true)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	statsReq := httptest.NewRequest(http.MethodGet, "/debug/stats", nil)
+	statsRec := httptest.NewRecorder()
+	router.HandleDebugStats(statsRec, statsReq)
+
+	if statsRec.Code != http.StatusOK {
+		t.Fatalf("stats endpoint = %d", statsRec.Code)
+	}
+
+	var snap StatsSnapshot
+	if err := json.NewDecoder(statsRec.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	if !snap.ApiKeyPresent {
+		t.Error("api_key_present should be true")
+	}
+}
+
+func TestApiKeyNotPresentWhenEmpty(t *testing.T) {
+	s := NewStats()
+	s.SetAPIKeyPresent(false)
+	snap := s.Snapshot()
+	if snap.ApiKeyPresent {
+		t.Error("api_key_present should be false when API key is empty")
+	}
+}
+
+func TestNoKeyInResponseHeaders(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "sk-or-secret-key-12345", "", "")
+	router := New(cfg, client)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	for key, values := range rec.Header() {
+		for _, v := range values {
+			if strings.Contains(v, "sk-or-secret-key-12345") {
+				t.Errorf("response header %q contains the API key: %s", key, v)
+			}
+			if strings.Contains(key, "sk-or-secret-key-12345") {
+				t.Errorf("response header name %q contains the API key", key)
+			}
+		}
+	}
+}
+
+func TestVersionEndpointDoesNotExposeKey(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "sk-or-secret-key-12345", "", "")
+	router := New(cfg, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/version", nil)
+	rec := httptest.NewRecorder()
+	router.HandleVersion(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "sk-or-secret-key-12345") {
+		t.Error("/version response should not contain the API key")
+	}
+	if strings.Contains(body, "Bearer") {
+		t.Error("/version response should not contain Authorization bearer text")
+	}
+}
+
+func TestHealthEndpointDoesNotExposeKey(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "sk-or-secret-key-12345", "", "")
+	router := New(cfg, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	router.HandleHealth(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "sk-or-secret-key-12345") {
+		t.Error("/health response should not contain the API key")
+	}
+}
+
+func TestDebugStatsDoesNotExposeKey(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "sk-or-secret-key-12345", "", "")
+	router := New(cfg, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/stats", nil)
+	rec := httptest.NewRecorder()
+	router.HandleDebugStats(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "sk-or-secret-key-12345") {
+		t.Error("/debug/stats should not contain the API key value")
+	}
+	if strings.Contains(body, "Bearer") {
+		t.Error("/debug/stats should not contain Authorization bearer text")
+	}
+}

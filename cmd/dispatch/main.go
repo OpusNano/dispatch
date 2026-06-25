@@ -95,6 +95,7 @@ func main() {
 	client := openrouter.NewClient(cfg.OpenRouter.BaseURL, apiKey, cfg.OpenRouter.HTTPReferer, cfg.OpenRouter.SiteTitle)
 
 	rtr := router.New(cfg, client)
+	rtr.Stats.SetAPIKeyPresent(true)
 
 	stopCh := make(chan struct{})
 
@@ -129,6 +130,8 @@ func main() {
 		"critical", criticalRM.Model,
 		"listen", cfg.Server.Listen,
 		"openrouter_base", cfg.OpenRouter.BaseURL,
+		"api_key_env", cfg.OpenRouter.APIKeyEnv,
+		"api_key_present", true,
 		"version", version.Version,
 	)
 

@@ -294,7 +294,26 @@ dispatch: OPENROUTER_API_KEY environment variable not set
 Set it via `.env` file or `-e OPENROUTER_API_KEY=sk-or-...`.
 
 ### Upstream 401
+
 The OpenRouter API key is invalid, expired, or has no credits. Check your key at https://openrouter.ai/keys.
+
+If the error body says `"Missing Authentication header"`, it means **Dispatch did not send the Authorization header upstream**. Verify:
+
+1. **Check container env** (from host):
+   ```bash
+   docker inspect dispatch --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^OPENROUTER_API_KEY=' && echo "set" || echo "missing"
+   ```
+   Scratch containers do not have `printenv`. Use `docker inspect`, not `docker exec printenv`.
+
+2. **Verify router.yaml matches**: `openrouter.api_key_env` must be `"OPENROUTER_API_KEY"` (the env var name, not the key value). The generated config has this by default.
+
+3. **Check startup log**: Dispatch logs `api_key_present: true` on successful startup. If missing, the env var is not set or the config field is wrong.
+
+4. **Check /debug/stats**: `api_key_present` field shows whether Dispatch has an API key loaded.
+
+5. **If env exists and error persists**: this is a Dispatch bug/regression — report with the startup log output.
+
+Do not use `docker exec printenv dispatch` — scratch containers have no shell.
 
 ### Upstream 429
 OpenRouter rate limiting. Reduce request volume or upgrade your plan.
