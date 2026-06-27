@@ -379,6 +379,7 @@ debug:
 config_reload:
   enabled: true
   poll_interval_seconds: 3
+  fail_requests_when_degraded: true
 
 version: ""
 `
@@ -657,7 +658,7 @@ When the client sends a "provider" object in the request, it is **merged** with 
   - Response includes request_id for correlation with logs.
 - **Response headers**: X-Dispatch-Request-Id, X-Dispatch-Level, X-Dispatch-Model, X-Dispatch-Score-*, X-Dispatch-Reasons.
 - **Metadata logs**: structured stdout logs include level, model, scores, reasons, duration.
-- **Health**: GET /health returns health status. Returns 200 with "status":"ok" when healthy, or 200 with "status":"degraded" when config reload is failing but Dispatch is still serving from the last valid config. Includes reload state summary with error details.
+- **Health**: GET /health returns health status. Returns 200 with "status":"ok" when healthy, or 200 with "status":"degraded" when config reload is failing. By default, /v1/chat/completions is blocked (503) while degraded. Includes reload state summary with error details.
 - **Readyz**: GET /readyz returns 200 with "status":"ready" when fully healthy, or 503 when config reload is failing ("not_ready" with reason "config_reload_failing"). Use for strict readiness probes (e.g., Kubernetes readiness checks).
 - **Version**: GET /version returns build info.
 - **Check config**: run "dispatch --check-config /path/to/router.yaml" to validate without starting.
@@ -666,17 +667,57 @@ When the client sends a "provider" object in the request, it is **merged** with 
 
 Dispatch auto-reloads router.yaml when it changes on disk (default: every 3 seconds, configurable via config_reload.poll_interval_seconds).
 
+### Strict Degraded Mode (Default)
+
+When a config reload fails, Dispatch keeps the last valid config in memory, marks the runtime as degraded, and **blocks /v1/chat/completions with a local 503** by default. This prevents silent use of old configs.
+
+The container does NOT exit on hot-reload failure. Reason:
+
+- A restart loop against a broken config removes debug endpoints (/health, /readyz, /debug/stats), making diagnosis harder.
+- Dispatch remains accessible for manual inspection and config validation.
+
+Startup with an invalid config still exits with a non-zero code and an error message -- this only applies to hot-reload failures.
+
+### /v1 Blocked Response
+
+When degraded in strict mode, /v1/chat/completions returns:
+
+    HTTP 503 Service Unavailable
+    Content-Type: application/json
+    X-Dispatch-Config-State: degraded
+    X-Dispatch-Config-Reload-Error: see /health or /debug/stats
+
+    {
+      "error": {
+        "message": "Dispatch config reload failed; current router.yaml is invalid. Fix the config or check /health and /debug/stats.",
+        "code": 503,
+        "type": "dispatch_config_degraded"
+      }
+    }
+
+This is an OpenAI-compatible error response. The error type "dispatch_config_degraded" lets clients distinguish config errors from upstream errors.
+
+Blocked requests do NOT count as upstream errors. They increment local_proxy_errors_total and degraded_blocked_total.
+
+### Opt-in Lenient Mode
+
+To serve the last valid config during reload failures instead of blocking, set:
+
+    config_reload:
+      fail_requests_when_degraded: false
+
+In lenient mode, requests forward as normal through the last valid config. Degraded headers are still set, and health/readyz/stats still show the degraded state.
+
 ### If Reload Fails
 
-Dispatch **never stops serving** when a config reload fails. It keeps the last valid config active and continues routing. This is safe but considered **degraded**.
+When degraded (both strict and lenient):
 
-When degraded:
 - /health returns HTTP 200 with "status": "degraded" and a reload error summary.
 - /readyz returns HTTP 503 with "status": "not_ready" (for strict readiness probes).
-- /debug/stats shows explicit reload failure fields (see below).
-- Response headers include "X-Dispatch-Config-State: degraded" and "X-Dispatch-Config-Reload-Error: see /health or /debug/stats".
+- /debug/stats shows explicit reload failure fields (see below) plus degraded_blocked_total and config_reload_fail_requests_when_degraded.
+- Responses include "X-Dispatch-Config-State: degraded" and "X-Dispatch-Config-Reload-Error: see /health or /debug/stats".
 
-Decorated state clears automatically on next successful reload. No restart needed.
+Degraded state clears automatically on next successful reload. No restart needed.
 
 ### Diagnosing Config Issues
 
@@ -686,18 +727,16 @@ Check reload state from any of these surfaces:
     curl -s http://localhost:18087/health | jq
 
     # Strict readiness (returns 503 when degraded)
-    curl -s http://localhost:18087/readyz | jq
+    curl -i http://localhost:18087/readyz
 
-    # Detailed reload state in stats
+    # Detailed reload state in stats (includes degraded_blocked_total)
     curl -s http://localhost:18087/debug/stats | jq '{
       active_config_state,
-      config_reload_success_count,
       config_reload_failure_count,
-      last_config_reload_success_unix,
-      last_config_reload_failure_unix,
       last_config_reload_error_truncated,
       config_reload_consecutive_failure_count,
-      config_reload_failure_first_seen_unix
+      degraded_blocked_total,
+      config_reload_fail_requests_when_degraded
     }'
 
 ### Checking Config Before Editing

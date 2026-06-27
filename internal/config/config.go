@@ -105,8 +105,9 @@ type DebugConfig struct {
 }
 
 type ConfigReloadConfig struct {
-	Enabled             bool `yaml:"enabled"`
-	PollIntervalSeconds int  `yaml:"poll_interval_seconds"`
+	Enabled                  bool  `yaml:"enabled"`
+	PollIntervalSeconds      int   `yaml:"poll_interval_seconds"`
+	FailRequestsWhenDegraded *bool `yaml:"fail_requests_when_degraded"`
 }
 
 type LengthConfig struct {
@@ -266,6 +267,10 @@ func (c *Config) CompileAndValidate() error {
 	}
 	if c.ConfigReload.PollIntervalSeconds <= 0 {
 		c.ConfigReload.PollIntervalSeconds = 3
+	}
+	if c.ConfigReload.FailRequestsWhenDegraded == nil {
+		def := true
+		c.ConfigReload.FailRequestsWhenDegraded = &def
 	}
 	if err := c.validate(); err != nil {
 		return err

@@ -15,6 +15,9 @@ import (
 	"dispatch/internal/openrouter"
 )
 
+var boolFalse = false
+var boolTrue = true
+
 func TestInvalidJSONReturns400(t *testing.T) {
 	router, _ := setupTest(t)
 	body := `{invalid json not parseable}`
@@ -1090,6 +1093,7 @@ func TestHealthRecovered(t *testing.T) {
 func TestDegradedResponseHeader(t *testing.T) {
 	cfg, _ := config.DefaultConfig()
 	cfg.Debug.SetResponseHeaders = true
+	cfg.ConfigReload.FailRequestsWhenDegraded = &boolFalse
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1127,6 +1131,7 @@ func TestDegradedResponseHeader(t *testing.T) {
 func TestDegradedResponseHeaderNotForwardedUpstream(t *testing.T) {
 	cfg, _ := config.DefaultConfig()
 	cfg.Debug.SetResponseHeaders = true
+	cfg.ConfigReload.FailRequestsWhenDegraded = &boolFalse
 
 	var receivedHeaders http.Header
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1199,6 +1204,7 @@ func TestNoDegradedHeaderWhenOk(t *testing.T) {
 func TestDegradedHeaderStreaming(t *testing.T) {
 	cfg, _ := config.DefaultConfig()
 	cfg.Debug.SetResponseHeaders = true
+	cfg.ConfigReload.FailRequestsWhenDegraded = &boolFalse
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -1427,5 +1433,332 @@ func TestStatsDoesNotLeakAPIKeyValue(t *testing.T) {
 	}
 	if strings.Contains(body, "\"api_key\"") {
 		t.Error("/debug/stats should not contain an api_key field with the value")
+	}
+}
+
+func TestDegradedBlockChatCompletions(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream must not be called in strict degraded mode")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml: duplicate key at line 42")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("strict degraded mode should return 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "degraded" {
+		t.Errorf("X-Dispatch-Config-State should be 'degraded', got %q", state)
+	}
+	if errHdr := rec.Header().Get("X-Dispatch-Config-Reload-Error"); errHdr != "see /health or /debug/stats" {
+		t.Errorf("X-Dispatch-Config-Reload-Error should be 'see /health or /debug/stats', got %q", errHdr)
+	}
+}
+
+func TestDegradedBlockErrorJSONFormat(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream must not be called")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"auto","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("response should contain an 'error' object, got: %s", rec.Body.String())
+	}
+	if code, ok := errObj["code"].(float64); !ok || int(code) != 503 {
+		t.Errorf("error.code should be 503, got %v", errObj["code"])
+	}
+	if errObj["type"] != "dispatch_config_degraded" {
+		t.Errorf("error.type should be 'dispatch_config_degraded', got %v", errObj["type"])
+	}
+	msg, _ := errObj["message"].(string)
+	if msg != "Dispatch config reload failed; current router.yaml is invalid. Fix the config or check /health and /debug/stats." {
+		t.Errorf("error.message mismatch: %q", msg)
+	}
+}
+
+func TestLenientModeAllowsForwarding(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.ConfigReload.FailRequestsWhenDegraded = &boolFalse
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("lenient mode should allow forwarding (200), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "degraded" {
+		t.Errorf("X-Dispatch-Config-State should be 'degraded' in lenient mode, got %q", state)
+	}
+}
+
+func TestDegradedBlockIncrementsLocalErrorCounter(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream must not be called")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	snap := router.Stats.Snapshot()
+	if snap.DegradedBlockedTotal < 1 {
+		t.Errorf("degraded_blocked_total should be >= 1, got %d", snap.DegradedBlockedTotal)
+	}
+	if snap.LocalProxyErrorsTotal < 1 {
+		t.Errorf("local_proxy_errors_total should be >= 1 after degraded block, got %d", snap.LocalProxyErrorsTotal)
+	}
+}
+
+func TestDegradedBlockDoesNotIncrementUpstreamCounters(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream must not be called")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	snap := router.Stats.Snapshot()
+	if snap.RequestsTotal != 0 {
+		t.Errorf("requests_total should be 0 (no upstream call), got %d", snap.RequestsTotal)
+	}
+	if snap.UpstreamErrorsTotal != 0 {
+		t.Errorf("upstream_errors_total should be 0, got %d", snap.UpstreamErrorsTotal)
+	}
+	if snap.Upstream503Total != 0 {
+		t.Errorf("upstream_503_total should be 0 (local 503, not upstream), got %d", snap.Upstream503Total)
+	}
+}
+
+func TestDegradedBlockNoSecretsInResponse(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "sk-or-secret-key-12345", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"auto","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	respBody := rec.Body.String()
+	for _, secret := range []string{"sk-or-", "OPENROUTER_API_KEY", "Bearer"} {
+		if strings.Contains(respBody, secret) {
+			t.Errorf("degraded block response should not contain %q", secret)
+		}
+	}
+	for key, values := range rec.Header() {
+		for _, v := range values {
+			if strings.Contains(v, "sk-or-secret-key-12345") {
+				t.Errorf("response header %q contains API key", key)
+			}
+		}
+	}
+}
+
+func TestDegradedBlockNotCalledWhenStateOk(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 when state is ok, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Error("upstream should have been called when state is ok")
+	}
+}
+
+func TestFailRequestsWhenDegradedDefaultTrue(t *testing.T) {
+	cfg, err := config.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConfigReload.FailRequestsWhenDegraded == nil || !*cfg.ConfigReload.FailRequestsWhenDegraded {
+		t.Error("fail_requests_when_degraded should default to true")
+	}
+}
+
+func TestDegradedBlockPreservesRequestIDHeader(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream must not be called")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"auto","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rid := rec.Header().Get("X-Dispatch-Request-Id"); rid == "" {
+		t.Error("degraded block response should include X-Dispatch-Request-Id")
+	}
+}
+
+func TestDegradedBlockStreaming(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream must not be called in strict degraded mode (streaming)")
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("strict degraded mode should block streaming (503), got %d", rec.Code)
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "degraded" {
+		t.Errorf("X-Dispatch-Config-State should be 'degraded' on streaming block, got %q", state)
+	}
+}
+
+func TestLenientModeStreamingAllowsForwarding(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.ConfigReload.FailRequestsWhenDegraded = &boolFalse
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("lenient streaming should forward (200), got %d", rec.Code)
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "degraded" {
+		t.Errorf("X-Dispatch-Config-State should be 'degraded' in lenient streaming, got %q", state)
 	}
 }

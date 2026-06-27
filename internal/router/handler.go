@@ -45,6 +45,11 @@ func (rt *Router) GetConfig() *config.Config {
 func (rt *Router) SwapConfig(newCfg *config.Config) {
 	rt.cfg.Store(newCfg)
 	rt.Stats.RecordReload(time.Now().Unix())
+	if newCfg.ConfigReload.FailRequestsWhenDegraded != nil {
+		rt.Stats.SetFailRequestsWhenDegraded(*newCfg.ConfigReload.FailRequestsWhenDegraded)
+	} else {
+		rt.Stats.SetFailRequestsWhenDegraded(true)
+	}
 }
 
 func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +62,28 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	requestID := generateRequestID()
 	w.Header().Set("X-Dispatch-Request-Id", requestID)
+
+	if rs := rt.Stats.ReloadState(); rs != nil && rs.ActiveConfigState() == "degraded_using_last_valid" {
+		failRequests := true
+		if cfg.ConfigReload.FailRequestsWhenDegraded != nil {
+			failRequests = *cfg.ConfigReload.FailRequestsWhenDegraded
+		}
+		if failRequests {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Dispatch-Config-State", "degraded")
+			w.Header().Set("X-Dispatch-Config-Reload-Error", "see /health or /debug/stats")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": "Dispatch config reload failed; current router.yaml is invalid. Fix the config or check /health and /debug/stats.",
+					"code":    503,
+					"type":    "dispatch_config_degraded",
+				},
+			})
+			rt.Stats.RecordDegradedBlock()
+			return
+		}
+	}
 
 	startTime := time.Now()
 	statusCode := http.StatusOK

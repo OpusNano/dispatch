@@ -134,13 +134,29 @@ Edit `/config/router.yaml` and the router picks up changes automatically (defaul
 
 ### Config Reload Resilience
 
-When a reload fails, Dispatch keeps serving from the last valid config. This is safe but considered **degraded**:
+When a reload fails, Dispatch keeps the last valid config in memory and marks the runtime as **degraded**. The container stays alive so debug endpoints remain available.
+
+**By default (strict degraded mode), `/v1/chat/completions` returns a local 503 until the config is fixed.** This ensures users see an immediate error in OpenCode when `router.yaml` breaks, rather than silently continuing with an old config.
+
+When degraded:
 
 - `/health` returns 200 with `"status": "degraded"` and reload error details.
 - `/readyz` returns 503 (`"status": "not_ready"`).
-- `/debug/stats` shows explicit reload failure state (`active_config_state`, `config_reload_failure_count`, `last_config_reload_error_truncated`, etc.).
-- Response headers include `X-Dispatch-Config-State: degraded` and `X-Dispatch-Config-Reload-Error: see /health or /debug/stats`.
+- `/debug/stats` shows explicit reload failure state (`active_config_state`, `config_reload_failure_count`, `last_config_reload_error_truncated`, `degraded_blocked_total`, etc.).
+- All responses include `X-Dispatch-Config-State: degraded` and `X-Dispatch-Config-Reload-Error: see /health or /debug/stats`.
 - Degraded state clears automatically on next successful reload.
+- Blocked requests do **not** count as upstream errors. They count as local config/degraded errors.
+
+**Opt-in lenient mode:** To serve the last valid config during reload failures (old behavior), set:
+
+```yaml
+config_reload:
+  fail_requests_when_degraded: false
+```
+
+In lenient mode, requests forward as normal, the degraded headers are set, and health/readyz/stats still reflect the degraded state.
+
+**Why the container does not exit:** Restart loops against a broken config make diagnosis harder (debug endpoints are gone). Startup with an invalid config still fails fast — this only applies to hot-reload failures.
 
 **Diagnose reload issues:**
 
@@ -231,6 +247,7 @@ debug:
 config_reload:
   enabled: true
   poll_interval_seconds: 3
+  fail_requests_when_degraded: true
 ```
 
 ## Development
@@ -440,6 +457,18 @@ This is expected. The router selects the actual model internally per request. Ch
 ### Config reload failed
 If you save a bad config, the router keeps the old config active and logs the error. Check stderr logs for "config reload: validation failed, keeping old config".
 
+**By default**, `/v1/chat/completions` responds with a local 503 until the config is fixed. The error response is OpenAI-compatible:
+
+```json
+{
+  "error": {
+    "message": "Dispatch config reload failed; current router.yaml is invalid. Fix the config or check /health and /debug/stats.",
+    "code": 503,
+    "type": "dispatch_config_degraded"
+  }
+}
+```
+
 **The reload failure is visible in:**
 - `/health` — returns `"status": "degraded"` with error details.
 - `/readyz` — returns 503.
@@ -457,3 +486,12 @@ If you save a bad config, the router keeps the old config active and logs the er
 **Fix:** Edit `/config/router.yaml` to fix the issue. On next poll (default 3 seconds), Dispatch detects the change, reloads successfully, and clears the degraded state. No restart needed.
 
 Run `dispatch --check-config --config /config/router.yaml` before or after editing to validate. Exits 0 if valid, 1 with details if invalid.
+
+To allow requests to continue during reload failures (lenient mode), set:
+
+```yaml
+config_reload:
+  fail_requests_when_degraded: false
+```
+
+The container never exits on hot-reload failure so that `/health`, `/readyz`, and `/debug/stats` remain available for diagnosis. A start-up invalid config still fails fast.

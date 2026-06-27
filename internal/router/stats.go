@@ -44,12 +44,15 @@ type Stats struct {
 	byUpstreamProvCode  map[string]*atomic.Int64
 
 	localProxyErrorsTotal atomic.Int64
+	degradedBlockedTotal  atomic.Int64
 
 	apiKeyPresent     atomic.Bool
 	apiKeyPrefixValid atomic.Bool
 	apiKeyLength      atomic.Int64
 
 	reloadState *config.ReloadState
+
+	failRequestsWhenDegraded atomic.Bool
 }
 
 func NewStats() *Stats {
@@ -66,6 +69,14 @@ func NewStats() *Stats {
 
 func (s *Stats) SetReloadState(rs *config.ReloadState) {
 	s.reloadState = rs
+}
+
+func (s *Stats) SetFailRequestsWhenDegraded(v bool) {
+	s.failRequestsWhenDegraded.Store(v)
+}
+
+func (s *Stats) FailRequestsWhenDegraded() bool {
+	return s.failRequestsWhenDegraded.Load()
 }
 
 func (s *Stats) ReloadState() *config.ReloadState {
@@ -171,6 +182,11 @@ func (s *Stats) RecordLocalError() {
 	s.localProxyErrorsTotal.Add(1)
 }
 
+func (s *Stats) RecordDegradedBlock() {
+	s.degradedBlockedTotal.Add(1)
+	s.localProxyErrorsTotal.Add(1)
+}
+
 func (s *Stats) RecordReload(unixTime int64) {
 	s.configReloadCount.Add(1)
 	s.lastConfigReload.Store(unixTime)
@@ -208,20 +224,22 @@ type StatsSnapshot struct {
 	Upstream503Total       int64            `json:"upstream_503_total"`
 	UpstreamEmbeddedTotal  int64            `json:"upstream_embedded_errors_total"`
 	LocalProxyErrorsTotal  int64            `json:"local_proxy_errors_total"`
+	DegradedBlockedTotal   int64            `json:"degraded_blocked_total"`
 	ApiKeyPresent          bool             `json:"api_key_present"`
 	ApiKeyPrefixValid      bool             `json:"api_key_prefix_valid"`
 	ApiKeyLength           int64            `json:"api_key_length"`
 	ApiKeyReloadCount      int64            `json:"api_key_reload_count"`
 	LastAPIKeyReloadUnix   int64            `json:"last_api_key_reload_unix"`
 
-	ActiveConfigState                string `json:"active_config_state"`
-	ConfigReloadSuccessCount         int64  `json:"config_reload_success_count"`
-	ConfigReloadFailureCount         int64  `json:"config_reload_failure_count"`
-	LastConfigReloadSuccessUnix      int64  `json:"last_config_reload_success_unix"`
-	LastConfigReloadFailureUnix      int64  `json:"last_config_reload_failure_unix"`
-	LastConfigReloadErrorTruncated   string `json:"last_config_reload_error_truncated,omitempty"`
-	ConfigReloadConsecutiveFailures  int64  `json:"config_reload_consecutive_failure_count"`
-	ConfigReloadFailureFirstSeenUnix int64  `json:"config_reload_failure_first_seen_unix"`
+	ActiveConfigState                    string `json:"active_config_state"`
+	ConfigReloadSuccessCount             int64  `json:"config_reload_success_count"`
+	ConfigReloadFailureCount             int64  `json:"config_reload_failure_count"`
+	LastConfigReloadSuccessUnix          int64  `json:"last_config_reload_success_unix"`
+	LastConfigReloadFailureUnix          int64  `json:"last_config_reload_failure_unix"`
+	LastConfigReloadErrorTruncated       string `json:"last_config_reload_error_truncated,omitempty"`
+	ConfigReloadConsecutiveFailures      int64  `json:"config_reload_consecutive_failure_count"`
+	ConfigReloadFailureFirstSeenUnix     int64  `json:"config_reload_failure_first_seen_unix"`
+	ConfigReloadFailRequestsWhenDegraded bool   `json:"config_reload_fail_requests_when_degraded"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -286,6 +304,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		Upstream503Total:       s.upstream503Total.Load(),
 		UpstreamEmbeddedTotal:  s.upstreamEmbeddedTotal.Load(),
 		LocalProxyErrorsTotal:  s.localProxyErrorsTotal.Load(),
+		DegradedBlockedTotal:   s.degradedBlockedTotal.Load(),
 		ApiKeyPresent:          s.apiKeyPresent.Load(),
 		ApiKeyPrefixValid:      s.apiKeyPrefixValid.Load(),
 		ApiKeyLength:           s.apiKeyLength.Load(),
@@ -304,6 +323,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ConfigReloadConsecutiveFailures = rs.ConfigReloadConsecutiveFailures
 		snap.ConfigReloadFailureFirstSeenUnix = rs.ConfigReloadFailureFirstSeenUnix
 	}
+	snap.ConfigReloadFailRequestsWhenDegraded = s.failRequestsWhenDegraded.Load()
 
 	return snap
 }

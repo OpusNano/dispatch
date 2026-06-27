@@ -116,6 +116,12 @@ func main() {
 	rtr.Stats.SetAPIKeyPresent(true)
 	rtr.Stats.SetAPIKeyMeta(keyPrefixValid, len(apiKey))
 
+	if cfg.ConfigReload.FailRequestsWhenDegraded != nil {
+		rtr.Stats.SetFailRequestsWhenDegraded(*cfg.ConfigReload.FailRequestsWhenDegraded)
+	} else {
+		rtr.Stats.SetFailRequestsWhenDegraded(true)
+	}
+
 	reloadState := config.NewReloadState()
 	rtr.Stats.SetReloadState(reloadState)
 
