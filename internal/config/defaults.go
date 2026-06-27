@@ -657,9 +657,67 @@ When the client sends a "provider" object in the request, it is **merged** with 
   - Response includes request_id for correlation with logs.
 - **Response headers**: X-Dispatch-Request-Id, X-Dispatch-Level, X-Dispatch-Model, X-Dispatch-Score-*, X-Dispatch-Reasons.
 - **Metadata logs**: structured stdout logs include level, model, scores, reasons, duration.
-- **Health**: GET /health returns {"status":"ok"}.
+- **Health**: GET /health returns health status. Returns 200 with "status":"ok" when healthy, or 200 with "status":"degraded" when config reload is failing but Dispatch is still serving from the last valid config. Includes reload state summary with error details.
+- **Readyz**: GET /readyz returns 200 with "status":"ready" when fully healthy, or 503 when config reload is failing ("not_ready" with reason "config_reload_failing"). Use for strict readiness probes (e.g., Kubernetes readiness checks).
 - **Version**: GET /version returns build info.
 - **Check config**: run "dispatch --check-config /path/to/router.yaml" to validate without starting.
+
+## Config Reload & Resilience
+
+Dispatch auto-reloads router.yaml when it changes on disk (default: every 3 seconds, configurable via config_reload.poll_interval_seconds).
+
+### If Reload Fails
+
+Dispatch **never stops serving** when a config reload fails. It keeps the last valid config active and continues routing. This is safe but considered **degraded**.
+
+When degraded:
+- /health returns HTTP 200 with "status": "degraded" and a reload error summary.
+- /readyz returns HTTP 503 with "status": "not_ready" (for strict readiness probes).
+- /debug/stats shows explicit reload failure fields (see below).
+- Response headers include "X-Dispatch-Config-State: degraded" and "X-Dispatch-Config-Reload-Error: see /health or /debug/stats".
+
+Decorated state clears automatically on next successful reload. No restart needed.
+
+### Diagnosing Config Issues
+
+Check reload state from any of these surfaces:
+
+    # Full health status (liveness -- returns 200 even when degraded)
+    curl -s http://localhost:18087/health | jq
+
+    # Strict readiness (returns 503 when degraded)
+    curl -s http://localhost:18087/readyz | jq
+
+    # Detailed reload state in stats
+    curl -s http://localhost:18087/debug/stats | jq '{
+      active_config_state,
+      config_reload_success_count,
+      config_reload_failure_count,
+      last_config_reload_success_unix,
+      last_config_reload_failure_unix,
+      last_config_reload_error_truncated,
+      config_reload_consecutive_failure_count,
+      config_reload_failure_first_seen_unix
+    }'
+
+### Checking Config Before Editing
+
+Always validate config after editing -- do not wait for the auto-reload to catch errors:
+
+    dispatch --check-config --config /config/router.yaml
+
+This exits 0 if valid, 1 with details if invalid. Run before saving changes, or immediately after.
+
+### Common Config Errors
+
+- **Duplicate YAML keys**: The Go YAML parser silently accepts duplicate keys (last value wins), but this can cause unexpected behavior. Use "yamllint" or a YAML-aware editor to catch duplicates. Dispatch's validation catches structural config errors (missing fields, invalid dimensions, duplicate pattern IDs, threshold ordering).
+- **YAML syntax errors**: Indentation, unquoted special characters, or trailing colons cause parse failures. The error is visible in /health and /debug/stats.
+
+### Log Output
+
+Reload failures are logged to stderr. The first failure logs the full error. Repeated identical failures are rate-limited (logged once per error change, or every 5 minutes for the same error). Recovery logs a clear message with the failure count and duration.
+
+No secrets are logged, and no config content is included in log, health, or stats output.
 
 ## Security
 

@@ -4,6 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"dispatch/internal/config"
 )
 
 type Stats struct {
@@ -46,6 +48,8 @@ type Stats struct {
 	apiKeyPresent     atomic.Bool
 	apiKeyPrefixValid atomic.Bool
 	apiKeyLength      atomic.Int64
+
+	reloadState *config.ReloadState
 }
 
 func NewStats() *Stats {
@@ -58,6 +62,14 @@ func NewStats() *Stats {
 		byUpstreamProvider:  make(map[string]*atomic.Int64),
 		byUpstreamProvCode:  make(map[string]*atomic.Int64),
 	}
+}
+
+func (s *Stats) SetReloadState(rs *config.ReloadState) {
+	s.reloadState = rs
+}
+
+func (s *Stats) ReloadState() *config.ReloadState {
+	return s.reloadState
 }
 
 func (s *Stats) Record(level, model string, statusCode int, isStream bool, routeDurationNs int64, sessionEscalated, gateFired, continuationDetected, lengthCapped, topicIgnored bool, errorType string, providerName string, providerCode string, embeddedError bool) {
@@ -201,6 +213,15 @@ type StatsSnapshot struct {
 	ApiKeyLength           int64            `json:"api_key_length"`
 	ApiKeyReloadCount      int64            `json:"api_key_reload_count"`
 	LastAPIKeyReloadUnix   int64            `json:"last_api_key_reload_unix"`
+
+	ActiveConfigState                string `json:"active_config_state"`
+	ConfigReloadSuccessCount         int64  `json:"config_reload_success_count"`
+	ConfigReloadFailureCount         int64  `json:"config_reload_failure_count"`
+	LastConfigReloadSuccessUnix      int64  `json:"last_config_reload_success_unix"`
+	LastConfigReloadFailureUnix      int64  `json:"last_config_reload_failure_unix"`
+	LastConfigReloadErrorTruncated   string `json:"last_config_reload_error_truncated,omitempty"`
+	ConfigReloadConsecutiveFailures  int64  `json:"config_reload_consecutive_failure_count"`
+	ConfigReloadFailureFirstSeenUnix int64  `json:"config_reload_failure_first_seen_unix"`
 }
 
 func (s *Stats) Snapshot() StatsSnapshot {
@@ -238,7 +259,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		avgMs = float64(totalNs) / float64(count) / 1e6
 	}
 
-	return StatsSnapshot{
+	snap := StatsSnapshot{
 		RequestsTotal:        s.requestsTotal.Load(),
 		ByLevel:              byLevel,
 		ByModel:              byModel,
@@ -271,4 +292,18 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		ApiKeyReloadCount:      s.apiKeyReloadCount.Load(),
 		LastAPIKeyReloadUnix:   s.lastAPIKeyReload.Load(),
 	}
+
+	if s.reloadState != nil {
+		rs := s.reloadState.Snapshot()
+		snap.ActiveConfigState = rs.ActiveConfigState
+		snap.ConfigReloadSuccessCount = rs.ConfigReloadSuccessCount
+		snap.ConfigReloadFailureCount = rs.ConfigReloadFailureCount
+		snap.LastConfigReloadSuccessUnix = rs.LastConfigReloadSuccessUnix
+		snap.LastConfigReloadFailureUnix = rs.LastConfigReloadFailureUnix
+		snap.LastConfigReloadErrorTruncated = rs.LastConfigReloadErrorTruncated
+		snap.ConfigReloadConsecutiveFailures = rs.ConfigReloadConsecutiveFailures
+		snap.ConfigReloadFailureFirstSeenUnix = rs.ConfigReloadFailureFirstSeenUnix
+	}
+
+	return snap
 }

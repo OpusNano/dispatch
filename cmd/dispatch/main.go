@@ -116,10 +116,13 @@ func main() {
 	rtr.Stats.SetAPIKeyPresent(true)
 	rtr.Stats.SetAPIKeyMeta(keyPrefixValid, len(apiKey))
 
+	reloadState := config.NewReloadState()
+	rtr.Stats.SetReloadState(reloadState)
+
 	stopCh := make(chan struct{})
 
 	if cfg.ConfigReload.Enabled {
-		reloader := config.NewReloader(cfgPath, cfg.ConfigReload.PollIntervalSeconds)
+		reloader := config.NewReloader(cfgPath, cfg.ConfigReload.PollIntervalSeconds, reloadState)
 		go reloader.Start(func(newCfg *config.Config) {
 			rtr.SwapConfig(newCfg)
 		}, stopCh)

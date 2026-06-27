@@ -78,7 +78,8 @@ This prevents a long hard debugging session from contaminating an unrelated easy
 | `/debug/stats` | GET | In-memory stats: request counts, by-level, by-model, by-status, avg duration, uptime, reload count |
 | `/debug/request?id=<request_id>` | GET | Metadata lookup for a past request (no prompt text, bounded ring buffer) |
 | `/debug/feedback` | POST | Submit feedback (disabled by default) |
-| `/health` | GET | Health check |
+| `/health` | GET | Health check (liveness). Returns 200 with `status: "ok"` when healthy, or 200 with `status: "degraded"` when config reload is failing. Includes reload error details. |
+| `/readyz` | GET | Strict readiness. Returns 200 when fully healthy, 503 when config reload is failing. |
 | `/version` | GET | Build info |
 
 ### Debug Classification
@@ -130,6 +131,32 @@ Edit `/config/router.yaml` and the router picks up changes automatically (defaul
 - API key is **not** reloaded from config — it stays env-driven.
 - `--check-config` remains available for manual validation.
 - Reload stats are visible at `/debug/stats` (`config_reload_count`, `last_config_reload_unix`).
+
+### Config Reload Resilience
+
+When a reload fails, Dispatch keeps serving from the last valid config. This is safe but considered **degraded**:
+
+- `/health` returns 200 with `"status": "degraded"` and reload error details.
+- `/readyz` returns 503 (`"status": "not_ready"`).
+- `/debug/stats` shows explicit reload failure state (`active_config_state`, `config_reload_failure_count`, `last_config_reload_error_truncated`, etc.).
+- Response headers include `X-Dispatch-Config-State: degraded` and `X-Dispatch-Config-Reload-Error: see /health or /debug/stats`.
+- Degraded state clears automatically on next successful reload.
+
+**Diagnose reload issues:**
+
+```bash
+curl -s http://localhost:18087/health | jq
+curl -s http://localhost:18087/readyz | jq
+curl -s http://localhost:18087/debug/stats | jq '{active_config_state, config_reload_failure_count, last_config_reload_error_truncated}'
+```
+
+**Validate config before editing:**
+
+```bash
+dispatch --check-config --config /config/router.yaml
+```
+
+**No prompt/request mutation**: Reload diagnostics live only in logs, `/health`, `/readyz`, `/debug/stats`, and optional Dispatch response headers. They never affect the upstream request body, model selection, provider config, or OpenRouter cache behavior.
 
 ## Architecture
 
@@ -411,4 +438,22 @@ When OpenRouter returns `Retry-After`, Dispatch passes it through unchanged. Ope
 This is expected. The router selects the actual model internally per request. Check the `X-Dispatch-Model` response header or container logs to see which model was used.
 
 ### Config reload failed
-If you save a bad config, the router keeps the old config active and logs the error. Check stderr logs for "config reload: validation failed".
+If you save a bad config, the router keeps the old config active and logs the error. Check stderr logs for "config reload: validation failed, keeping old config".
+
+**The reload failure is visible in:**
+- `/health` — returns `"status": "degraded"` with error details.
+- `/readyz` — returns 503.
+- `/debug/stats` — `active_config_state: "degraded_using_last_valid"`, failure counters, error text.
+- Response headers — `X-Dispatch-Config-State: degraded`.
+- Container logs — rate-limited (first failure logged immediately, repeated identical failures logged every 5 minutes).
+
+**Common causes:**
+- YAML syntax error (indentation, unquoted colons, etc.)
+- Duplicate pattern IDs
+- Invalid regex in a pattern rule
+- Threshold ordering violation
+- Missing required fields
+
+**Fix:** Edit `/config/router.yaml` to fix the issue. On next poll (default 3 seconds), Dispatch detects the change, reloads successfully, and clears the degraded state. No restart needed.
+
+Run `dispatch --check-config --config /config/router.yaml` before or after editing to validate. Exits 0 if valid, 1 with details if invalid.

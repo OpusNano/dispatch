@@ -136,6 +136,11 @@ func (rt *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		openrouter.SetRoutingHeaders(w, cls)
 	}
 
+	if rs := rt.Stats.ReloadState(); rs != nil && rs.ActiveConfigState() == "degraded_using_last_valid" {
+		w.Header().Set("X-Dispatch-Config-State", "degraded")
+		w.Header().Set("X-Dispatch-Config-Reload-Error", "see /health or /debug/stats")
+	}
+
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
@@ -374,7 +379,48 @@ func (rt *Router) HandleDebugRoute(w http.ResponseWriter, r *http.Request) {
 
 func (rt *Router) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	rs := rt.Stats.ReloadState()
+	if rs == nil || rs.ActiveConfigState() == "ok" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "ok",
+			"serving": true,
+			"config": map[string]interface{}{
+				"active":    "current",
+				"reload_ok": true,
+			},
+		})
+		return
+	}
+	snap := rs.Snapshot()
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "degraded",
+		"serving": true,
+		"config": map[string]interface{}{
+			"active":              "last_valid",
+			"reload_ok":           false,
+			"last_error":          snap.LastConfigReloadErrorTruncated,
+			"failed_reload_count": snap.ConfigReloadFailureCount,
+			"last_failure_unix":   snap.LastConfigReloadFailureUnix,
+		},
+	})
+}
+
+func (rt *Router) HandleReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	rs := rt.Stats.ReloadState()
+	if rs == nil || rs.ActiveConfigState() == "ok" {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+		return
+	}
+	snap := rs.Snapshot()
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "not_ready",
+		"reason": "config_reload_failing",
+		"detail": snap.LastConfigReloadErrorTruncated,
+	})
 }
 
 func (rt *Router) HandleVersion(w http.ResponseWriter, r *http.Request) {
@@ -485,6 +531,7 @@ func (rt *Router) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/request", rt.HandleDebugRequestLookup)
 	mux.HandleFunc("/debug/feedback", rt.HandleDebugFeedback)
 	mux.HandleFunc("/health", rt.HandleHealth)
+	mux.HandleFunc("/readyz", rt.HandleReadyz)
 	mux.HandleFunc("/version", rt.HandleVersion)
 }
 

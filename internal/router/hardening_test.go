@@ -968,6 +968,373 @@ func TestDebugStatsDoesNotExposeKey(t *testing.T) {
 	}
 }
 
+func TestReadyzOkWithoutReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	router.HandleReadyz(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("/readyz should return 200 when no reload state (ok), got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["status"] != "ready" {
+		t.Errorf("status should be 'ready', got %q", resp["status"])
+	}
+}
+
+func TestReadyzDegradedWithReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml: duplicate key at line 42")
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	router.HandleReadyz(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz should return 503 when degraded, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["status"] != "not_ready" {
+		t.Errorf("status should be 'not_ready', got %v", resp["status"])
+	}
+	if resp["reason"] != "config_reload_failing" {
+		t.Errorf("reason should be 'config_reload_failing', got %v", resp["reason"])
+	}
+}
+
+func TestHealthOkWithoutReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	router.HandleHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("/health should return 200, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["status"] != "ok" {
+		t.Errorf("status should be 'ok', got %v", resp["status"])
+	}
+}
+
+func TestHealthDegradedWithReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml: duplicate key at line 42")
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	router.HandleHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("/health should return 200 even when degraded, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["status"] != "degraded" {
+		t.Errorf("status should be 'degraded', got %v", resp["status"])
+	}
+	serving, _ := resp["serving"].(bool)
+	if !serving {
+		t.Error("serving should be true")
+	}
+	config, _ := resp["config"].(map[string]interface{})
+	if config["active"] != "last_valid" {
+		t.Errorf("config.active should be 'last_valid', got %v", config["active"])
+	}
+}
+
+func TestHealthRecovered(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("old error")
+	rs.RecordSuccess()
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	router.HandleHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("/health should return 200 after recovery, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["status"] != "ok" {
+		t.Errorf("status should be 'ok' after recovery, got %v", resp["status"])
+	}
+}
+
+func TestDegradedResponseHeader(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.Debug.SetResponseHeaders = true
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml: duplicate key")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "degraded" {
+		t.Errorf("X-Dispatch-Config-State should be 'degraded', got %q", state)
+	}
+	if errHdr := rec.Header().Get("X-Dispatch-Config-Reload-Error"); errHdr != "see /health or /debug/stats" {
+		t.Errorf("X-Dispatch-Config-Reload-Error should be 'see /health or /debug/stats', got %q", errHdr)
+	}
+}
+
+func TestDegradedResponseHeaderNotForwardedUpstream(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.Debug.SetResponseHeaders = true
+
+	var receivedHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml: duplicate key at line 42")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if receivedHeaders.Get("X-Dispatch-Config-State") != "" {
+		t.Error("X-Dispatch-Config-State should NOT be forwarded upstream")
+	}
+	if receivedHeaders.Get("X-Dispatch-Config-Reload-Error") != "" {
+		t.Error("X-Dispatch-Config-Reload-Error should NOT be forwarded upstream")
+	}
+}
+
+func TestNoDegradedHeaderWhenOk(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.Debug.SetResponseHeaders = true
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "" {
+		t.Errorf("X-Dispatch-Config-State should be empty when ok, got %q", state)
+	}
+}
+
+func TestDegradedHeaderStreaming(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	cfg.Debug.SetResponseHeaders = true
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+	}))
+	t.Cleanup(upstream.Close)
+	cfg.OpenRouter.BaseURL = upstream.URL
+	client := openrouter.NewClient(upstream.URL, "test-key", "", "dispatch")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml: duplicate key at line 42")
+	router.Stats.SetReloadState(rs)
+
+	body := `{"model":"dispatch/auto","messages":[{"role":"user","content":"test"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if state := rec.Header().Get("X-Dispatch-Config-State"); state != "degraded" {
+		t.Errorf("X-Dispatch-Config-State should be 'degraded' in streaming, got %q", state)
+	}
+}
+
+func TestStatsShowsReloadStateFields(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("duplicate yaml key")
+	rs.RecordSuccess()
+	rs.RecordFailure("another error")
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/stats", nil)
+	rec := httptest.NewRecorder()
+	router.HandleDebugStats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stats = %d", rec.Code)
+	}
+	var snap StatsSnapshot
+	json.NewDecoder(rec.Body).Decode(&snap)
+
+	if snap.ActiveConfigState != "degraded_using_last_valid" {
+		t.Errorf("active_config_state = %q, want 'degraded_using_last_valid'", snap.ActiveConfigState)
+	}
+	if snap.ConfigReloadSuccessCount != 1 {
+		t.Errorf("success_count = %d, want 1", snap.ConfigReloadSuccessCount)
+	}
+	if snap.ConfigReloadFailureCount != 2 {
+		t.Errorf("failure_count = %d, want 2", snap.ConfigReloadFailureCount)
+	}
+	if snap.LastConfigReloadFailureUnix == 0 {
+		t.Error("last_failure_unix should be non-zero")
+	}
+	if snap.LastConfigReloadErrorTruncated == "" {
+		t.Error("last_error should be non-empty")
+	}
+	if snap.ConfigReloadConsecutiveFailures == 0 {
+		t.Error("consecutive_failures should be non-zero")
+	}
+	if snap.ConfigReloadFailureFirstSeenUnix == 0 {
+		t.Error("failure_first_seen_unix should be non-zero")
+	}
+}
+
+func TestStatsNoSecretsInReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("failed to load config at /config/router.yaml")
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/stats", nil)
+	rec := httptest.NewRecorder()
+	router.HandleDebugStats(rec, req)
+
+	body := rec.Body.String()
+	for _, secret := range []string{"sk-or-", "OPENROUTER_API_KEY", "Bearer"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("/debug/stats reload state should not contain %q", secret)
+		}
+	}
+}
+
+func TestHealthNoSecretsInReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	router.HandleHealth(rec, req)
+
+	body := rec.Body.String()
+	for _, secret := range []string{"sk-or-", "OPENROUTER_API_KEY", "Bearer"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("/health should not contain %q", secret)
+		}
+	}
+}
+
+func TestReadyzNoSecretsInReloadState(t *testing.T) {
+	cfg, _ := config.DefaultConfig()
+	client := openrouter.NewClient("https://openrouter.ai/api/v1", "test-key", "", "")
+	router := New(cfg, client)
+
+	rs := config.NewReloadState()
+	rs.RecordFailure("yaml error")
+	router.Stats.SetReloadState(rs)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	router.HandleReadyz(rec, req)
+
+	body := rec.Body.String()
+	for _, secret := range []string{"sk-or-", "OPENROUTER_API_KEY", "Bearer"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("/readyz should not contain %q", secret)
+		}
+	}
+}
+
 func TestAPIKeyHotReloadUpdatesUpstreamAuth(t *testing.T) {
 	cfg, err := config.DefaultConfig()
 	if err != nil {
